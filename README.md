@@ -1,0 +1,1 @@
+A prototype of PoS network for the Weather Blockchain.
