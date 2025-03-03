@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"github.com/stretchr/testify/assert"
 	"net"
 	"testing"
 	"time"
@@ -8,68 +10,60 @@ import (
 
 // TestServerStart tests if the node starts successfully
 func TestServerStart(t *testing.T) {
-	// Create a node on port 8000
-	node := NewNode(8000)
+	var port = 8000
+	var id = fmt.Sprintf("localhost:%d", port)
+	node := NewNode(id, port)
+
+	assert.NotNil(t, node)
+	assert.Equal(t, id, node.ID)
+	assert.Equal(t, port, node.Port)
 
 	// Start the node
 	err := node.Start()
-	if err != nil {
-		t.Fatalf("Failed to start node: %v", err)
-	}
+	assert.NoError(t, err, "Failed to start node")
 	defer node.Stop()
 
 	// Check if node is listening
-	if !node.IsListening() {
-		t.Error("Server should be listening but isn't")
-	}
+	assert.True(t, node.IsListening(), "Server should be listening but isn't")
 }
 
 // TestServerConnection tests if the node accepts connections
 func TestServerConnection(t *testing.T) {
-	// Create a node on port 8001
-	node := NewNode(8001)
+	var port = 8001
+	var id = fmt.Sprintf("localhost:%d", port)
+	node := NewNode(id, port)
 
 	// Start the node
 	err := node.Start()
-	if err != nil {
-		t.Fatalf("Failed to start node: %v", err)
-	}
+	assert.NoError(t, err, "Failed to start node")
 	defer node.Stop()
 
 	// Try to connect to the node
 	conn, err := net.Dial("tcp", "localhost:8001")
-	if err != nil {
-		t.Errorf("Failed to connect to node: %v", err)
-	} else {
+	assert.NoError(t, err, "Failed to connect to node")
+	if err == nil {
 		conn.Close()
 	}
 }
 
 // TestServerStop tests if the node stops successfully
 func TestServerStop(t *testing.T) {
-	// Create a node on port 8002
-	node := NewNode(8002)
+	var port = 8002
+	var id = fmt.Sprintf("localhost:%d", port)
+	node := NewNode(id, port)
 
 	// Start the node
 	err := node.Start()
-	if err != nil {
-		t.Fatalf("Failed to start node: %v", err)
-	}
+	assert.NoError(t, err, "Failed to start node")
 
 	// Stop the node
 	err = node.Stop()
-	if err != nil {
-		t.Errorf("Failed to stop node: %v", err)
-	}
+	assert.NoError(t, err, "Failed to stop node")
 
 	// Check if node is not listening anymore
-	if node.IsListening() {
-		t.Error("Server should not be listening after stop")
-	}
+	assert.False(t, node.IsListening(), "Server should not be listening after stop")
 
 	// Try to connect to the node, should fail
 	_, err = net.DialTimeout(TcpNetwork, "localhost:8002", 500*time.Millisecond)
-	if err == nil {
-		t.Error("Server is still accepting connections after stop")
-	}
+	assert.Error(t, err, "Server is still accepting connections after stop")
 }

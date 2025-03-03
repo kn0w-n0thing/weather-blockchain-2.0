@@ -18,9 +18,9 @@ type Node struct {
 }
 
 // NewNode creates a new node
-func NewNode(port int) *Node {
+func NewNode(id string, port int) *Node {
 	return &Node{
-		ID:   fmt.Sprintf("node-%d", port),
+		ID:   id,
 		Port: port,
 	}
 }
@@ -63,7 +63,9 @@ func main() {
 		log.Fatalf("Invalid port number: %v", err)
 	}
 
-	node := NewNode(port)
+	var id = fmt.Sprintf("localhost:%d", port)
+
+	node := NewNode(id, port)
 	if err := node.Start(); err != nil {
 		log.Fatalf("Failed to start node: %v", err)
 	}
