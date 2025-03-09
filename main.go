@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"github.com/hashicorp/mdns"
+	"github.com/urfave/cli/v2"
 	"log"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"weather-blockchain/account"
 )
 
 const TcpNetwork = "tcp"
@@ -195,48 +197,97 @@ func (node *Node) GetKnownNodes() map[string]string {
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		log.Fatal("Usage: ./simple_server <id> <port>")
-	}
+	app := &cli.App{
+		Name:  "weather-blockchain",
+		Usage: "Weather Blockchain client",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "create-pem",
+				Value: "./key.pem",
+				Usage: "create a pem file",
+			},
+			&cli.StringFlag{
+				Name:  "pem",
+				Value: "./key.pem",
+				Usage: "key pem file path",
+			},
+			&cli.IntFlag{
+				Name:  "port",
+				Value: 18790,
+				Usage: "Port to connect on",
+			},
+		},
+		Action: func(c *cli.Context) error {
+			var acc *account.Account
+			var err error
+			createPem := c.String("create-pem")
+			if createPem != "" {
+				acc, err = account.New()
+				if err != nil {
+					return err
+				}
 
-	id := os.Args[1]
+				err = acc.SaveToFile(createPem)
 
-	port, err := strconv.Atoi(os.Args[2])
-	if err != nil {
-		log.Fatalf("Invalid port number: %v", err)
-	}
-
-	node := NewNode(id, port)
-	if err := node.Start(); err != nil {
-		log.Fatalf("Failed to start node: %v", err)
-	}
-	defer node.Stop()
-
-	// Setup signal handling for graceful shutdown
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-
-	// Periodically display discovered nodes
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		conn, err := node.listener.Accept()
-		if err != nil {
-			log.Printf("Error accepting connection: %v", err)
-			continue
-		}
-		select {
-		case <-ticker.C:
-			nodes := node.GetKnownNodes()
-			log.Printf("Known nodes (%d):", len(nodes))
-			for id, addr := range nodes {
-				log.Printf("  - %s at %s", id, addr)
+				if err != nil {
+					return err
+				}
 			}
-		case <-signals:
-			conn.Close()
-			log.Println("Shutting down...")
-			return
-		}
+
+			if acc == nil {
+				pem := c.String("pem")
+				acc, err = account.LoadFromFile(pem)
+
+				if err != nil {
+					return err
+				}
+			}
+
+			if acc == nil {
+				log.Fatalf("Failed to create or load a pem file")
+			}
+
+			port := c.Int("port")
+			node := NewNode(acc.Address, port)
+
+			if err := node.Start(); err != nil {
+				log.Fatalf("Failed to start node: %v", err)
+			}
+			defer node.Stop()
+
+			// Setup signal handling for graceful shutdown
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+
+			// Periodically display discovered nodes
+			ticker := time.NewTicker(10 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				conn, err := node.listener.Accept()
+				if err != nil {
+					log.Printf("Error accepting connection: %v", err)
+					continue
+				}
+				select {
+				case <-ticker.C:
+					nodes := node.GetKnownNodes()
+					log.Printf("Known nodes (%d):", len(nodes))
+					for id, addr := range nodes {
+						log.Printf("  - %s at %s", id, addr)
+					}
+				case <-signals:
+					conn.Close()
+					log.Println("Shutting down...")
+					return nil
+				}
+			}
+
+			return nil
+		},
+	}
+
+	if err := app.Run(os.Args); err != nil {
+		log.Fatal(err)
 	}
 }
