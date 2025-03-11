@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 	"weather-blockchain/account"
+	"weather-blockchain/block"
 )
 
 const TcpNetwork = "tcp"
@@ -216,12 +217,17 @@ func main() {
 				Value: 18790,
 				Usage: "Port to connect on",
 			},
+			&cli.BoolFlag{
+				Name:  "genesis",
+				Value: false,
+				Usage: "Create the genesis block",
+			},
 		},
 		Action: func(c *cli.Context) error {
 			var acc *account.Account
 			var err error
-			createPem := c.String("create-pem")
-			if createPem != "" {
+
+			if createPem := c.String("create-pem"); createPem != "" {
 				acc, err = account.New()
 				if err != nil {
 					return err
@@ -245,6 +251,27 @@ func main() {
 
 			if acc == nil {
 				log.Fatalf("Failed to create or load a pem file")
+			}
+
+			if genesis := c.Bool("genesis"); genesis {
+				var genesisBlock *block.Block
+				genesisBlock, err = block.CreateGenesisBlock(acc)
+				if err != nil {
+					log.Fatalf("Failed to create a genesis block: %v", err)
+				}
+
+				blockchain := block.NewBlockchain()
+				err = blockchain.AddBlock(genesisBlock)
+				if err != nil {
+					log.Fatalf("Failed to add a genesis block: %v", err)
+					return err
+				}
+				// Persist the genesis block
+				//storage.SaveGenesisBlock(genesisBlock)
+			} else {
+				// Load existing genesis block
+				//genesisBlock := storage.LoadGenesisBlock()
+				//blockchain.AddBlock(genesisBlock)
 			}
 
 			port := c.Int("port")
