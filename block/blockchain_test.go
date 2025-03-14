@@ -13,19 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// createTestBlock is a helper function to create a test block
-//func createTestBlock(index uint64, prevHash string, validatorAddress string, data string) *Block {
-//	block := &Block{
-//		Index:            index,
-//		Timestamp:        time.Now().Unix(),
-//		PrevHash:         prevHash,
-//		ValidatorAddress: validatorAddress,
-//		Data:             data,
-//	}
-//	block.StoreHash()
-//	return block
-//}
-
 // createSignedBlock is a helper to create a test block with a valid signature
 func createSignedBlock(index uint64, prevHash string, acc *account.Account, data string) (*Block, error) {
 	block := &Block{

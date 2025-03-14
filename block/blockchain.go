@@ -39,12 +39,12 @@ func NewBlockchain(dataPath ...string) *Blockchain {
 }
 
 // AddBlock adds a new block to the blockchain
-func (blockChain *Blockchain) AddBlock(block *Block) error {
-	blockChain.mutex.Lock()
-	defer blockChain.mutex.Unlock()
+func (blockchain *Blockchain) AddBlock(block *Block) error {
+	blockchain.mutex.Lock()
+	defer blockchain.mutex.Unlock()
 
 	// If it's the genesis block
-	if len(blockChain.Blocks) == 0 {
+	if len(blockchain.Blocks) == 0 {
 		// Verify the block is actually a genesis block
 		if block.Index != 0 || block.PrevHash != PrevHashOfGenesis {
 			return errors.New("invalid genesis block")
@@ -54,13 +54,13 @@ func (blockChain *Blockchain) AddBlock(block *Block) error {
 		block.StoreHash()
 
 		// Add the genesis block
-		blockChain.Blocks = append(blockChain.Blocks, block)
-		blockChain.LatestHash = block.Hash
+		blockchain.Blocks = append(blockchain.Blocks, block)
+		blockchain.LatestHash = block.Hash
 		return nil
 	}
 
 	// For non-genesis blocks, validate the block before adding
-	err := blockChain.validateBlock(block)
+	err := blockchain.validateBlock(block)
 	if err != nil {
 		return err
 	}
@@ -69,15 +69,15 @@ func (blockChain *Blockchain) AddBlock(block *Block) error {
 	block.StoreHash()
 
 	// Add the block to the chain
-	blockChain.Blocks = append(blockChain.Blocks, block)
-	blockChain.LatestHash = block.Hash
+	blockchain.Blocks = append(blockchain.Blocks, block)
+	blockchain.LatestHash = block.Hash
 	return nil
 }
 
 // validateBlock checks if a block is valid to be added to the blockchain
-func (blockChain *Blockchain) validateBlock(block *Block) error {
+func (blockchain *Blockchain) validateBlock(block *Block) error {
 	// Get the latest block
-	latestBlock := blockChain.Blocks[len(blockChain.Blocks)-1]
+	latestBlock := blockchain.Blocks[len(blockchain.Blocks)-1]
 
 	// Check if the index is correct
 	if block.Index != latestBlock.Index+1 {
@@ -102,11 +102,11 @@ func (blockChain *Blockchain) validateBlock(block *Block) error {
 }
 
 // GetBlockByHash retrieves a block by its hash
-func (blockChain *Blockchain) GetBlockByHash(hash string) *Block {
-	blockChain.mutex.RLock()
-	defer blockChain.mutex.RUnlock()
+func (blockchain *Blockchain) GetBlockByHash(hash string) *Block {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
 
-	for _, block := range blockChain.Blocks {
+	for _, block := range blockchain.Blocks {
 		if block.Hash == hash {
 			return block
 		}
@@ -115,11 +115,11 @@ func (blockChain *Blockchain) GetBlockByHash(hash string) *Block {
 }
 
 // GetBlockByIndex retrieves a block by its index
-func (blockChain *Blockchain) GetBlockByIndex(index uint64) *Block {
-	blockChain.mutex.RLock()
-	defer blockChain.mutex.RUnlock()
+func (blockchain *Blockchain) GetBlockByIndex(index uint64) *Block {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
 
-	for _, block := range blockChain.Blocks {
+	for _, block := range blockchain.Blocks {
 		if block.Index == index {
 			return block
 		}
@@ -128,52 +128,52 @@ func (blockChain *Blockchain) GetBlockByIndex(index uint64) *Block {
 }
 
 // GetLatestBlock returns the latest block in the chain
-func (blockChain *Blockchain) GetLatestBlock() *Block {
-	blockChain.mutex.RLock()
-	defer blockChain.mutex.RUnlock()
+func (blockchain *Blockchain) GetLatestBlock() *Block {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
 
-	if len(blockChain.Blocks) == 0 {
+	if len(blockchain.Blocks) == 0 {
 		return nil
 	}
 
-	return blockChain.Blocks[len(blockChain.Blocks)-1]
+	return blockchain.Blocks[len(blockchain.Blocks)-1]
 }
 
 // IsBlockValid checks if a block can be added to the chain
-func (blockChain *Blockchain) IsBlockValid(block *Block) error {
-	blockChain.mutex.RLock()
-	defer blockChain.mutex.RUnlock()
+func (blockchain *Blockchain) IsBlockValid(block *Block) error {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
 
 	// If it's an empty blockchain, check if it's a valid genesis block
-	if len(blockChain.Blocks) == 0 {
+	if len(blockchain.Blocks) == 0 {
 		if block.Index != 0 || block.PrevHash != PrevHashOfGenesis {
 			return errors.New("invalid genesis block")
 		}
 		return nil
 	}
 
-	return blockChain.validateBlock(block)
+	return blockchain.validateBlock(block)
 }
 
 // VerifyChain validates the entire blockchain
-func (blockChain *Blockchain) VerifyChain() bool {
-	blockChain.mutex.RLock()
-	defer blockChain.mutex.RUnlock()
+func (blockchain *Blockchain) VerifyChain() bool {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
 
-	if len(blockChain.Blocks) == 0 {
+	if len(blockchain.Blocks) == 0 {
 		return true
 	}
 
 	// Check the genesis block
-	genesisBlock := blockChain.Blocks[0]
+	genesisBlock := blockchain.Blocks[0]
 	if genesisBlock.Index != 0 || genesisBlock.PrevHash != PrevHashOfGenesis {
 		return false
 	}
 
 	// Verify each block in the chain
-	for i := 1; i < len(blockChain.Blocks); i++ {
-		currentBlock := blockChain.Blocks[i]
-		previousBlock := blockChain.Blocks[i-1]
+	for i := 1; i < len(blockchain.Blocks); i++ {
+		currentBlock := blockchain.Blocks[i]
+		previousBlock := blockchain.Blocks[i-1]
 
 		// Check block index
 		if currentBlock.Index != previousBlock.Index+1 {
@@ -198,24 +198,24 @@ func (blockChain *Blockchain) VerifyChain() bool {
 }
 
 // SaveToDisk persists the blockchain to disk
-func (blockChain *Blockchain) SaveToDisk() error {
-	blockChain.mutex.RLock()
-	defer blockChain.mutex.RUnlock()
+func (blockchain *Blockchain) SaveToDisk() error {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
 
 	// Create data directory if it doesn't exist
-	err := os.MkdirAll(blockChain.dataPath, 0755)
+	err := os.MkdirAll(blockchain.dataPath, 0755)
 	if err != nil {
 		return errors.New("failed to create data directory: " + err.Error())
 	}
 
 	// Marshal blockchain data to JSON
-	data, err := json.MarshalIndent(blockChain.Blocks, "", "  ")
+	data, err := json.MarshalIndent(blockchain.Blocks, "", "  ")
 	if err != nil {
 		return errors.New("failed to marshal blockchain data: " + err.Error())
 	}
 
 	// Write to file
-	filePath := filepath.Join(blockChain.dataPath, ChainFile)
+	filePath := filepath.Join(blockchain.dataPath, ChainFile)
 	err = os.WriteFile(filePath, data, 0644)
 	if err != nil {
 		return errors.New("failed to write blockchain to disk: " + err.Error())
@@ -225,11 +225,11 @@ func (blockChain *Blockchain) SaveToDisk() error {
 }
 
 // LoadFromDisk loads the blockchain from disk
-func (blockChain *Blockchain) LoadFromDisk() error {
-	blockChain.mutex.Lock()
-	defer blockChain.mutex.Unlock()
+func (blockchain *Blockchain) LoadFromDisk() error {
+	blockchain.mutex.Lock()
+	defer blockchain.mutex.Unlock()
 
-	filePath := filepath.Join(blockChain.dataPath, ChainFile)
+	filePath := filepath.Join(blockchain.dataPath, ChainFile)
 
 	// Check if file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
@@ -280,21 +280,21 @@ func (blockChain *Blockchain) LoadFromDisk() error {
 		}
 
 		// Set blocks and latest hash
-		blockChain.Blocks = blocks
-		blockChain.LatestHash = blocks[len(blocks)-1].Hash
+		blockchain.Blocks = blocks
+		blockchain.LatestHash = blocks[len(blocks)-1].Hash
 	}
 
 	return nil
 }
 
 // AddBlockWithAutoSave AutoSave saves the blockchain to disk after each block addition
-func (blockChain *Blockchain) AddBlockWithAutoSave(block *Block) error {
+func (blockchain *Blockchain) AddBlockWithAutoSave(block *Block) error {
 	// First add the block to the chain
-	err := blockChain.AddBlock(block)
+	err := blockchain.AddBlock(block)
 	if err != nil {
 		return err
 	}
 
 	// Then save to disk
-	return blockChain.SaveToDisk()
+	return blockchain.SaveToDisk()
 }
