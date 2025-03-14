@@ -2,8 +2,16 @@ package block
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
+)
+
+const (
+	DataDirectory = "./data"
+	ChainFile     = "blockchain.json"
 )
 
 // Blockchain represents the blockchain data structure
@@ -11,13 +19,22 @@ type Blockchain struct {
 	Blocks     []*Block
 	LatestHash string
 	mutex      sync.RWMutex
+	dataPath   string
 }
 
 // NewBlockchain creates a new blockchain with the genesis block
-func NewBlockchain() *Blockchain {
+func NewBlockchain(dataPath ...string) *Blockchain {
+	path := DataDirectory // Default path
+
+	// If a path was provided, use it instead
+	if len(dataPath) > 0 && dataPath[0] != "" {
+		path = dataPath[0]
+	}
+
 	return &Blockchain{
 		Blocks:     make([]*Block, 0),
 		LatestHash: "",
+		dataPath:   path,
 	}
 }
 
@@ -178,4 +195,106 @@ func (blockChain *Blockchain) VerifyChain() bool {
 	}
 
 	return true
+}
+
+// SaveToDisk persists the blockchain to disk
+func (blockChain *Blockchain) SaveToDisk() error {
+	blockChain.mutex.RLock()
+	defer blockChain.mutex.RUnlock()
+
+	// Create data directory if it doesn't exist
+	err := os.MkdirAll(blockChain.dataPath, 0755)
+	if err != nil {
+		return errors.New("failed to create data directory: " + err.Error())
+	}
+
+	// Marshal blockchain data to JSON
+	data, err := json.MarshalIndent(blockChain.Blocks, "", "  ")
+	if err != nil {
+		return errors.New("failed to marshal blockchain data: " + err.Error())
+	}
+
+	// Write to file
+	filePath := filepath.Join(blockChain.dataPath, ChainFile)
+	err = os.WriteFile(filePath, data, 0644)
+	if err != nil {
+		return errors.New("failed to write blockchain to disk: " + err.Error())
+	}
+
+	return nil
+}
+
+// LoadFromDisk loads the blockchain from disk
+func (blockChain *Blockchain) LoadFromDisk() error {
+	blockChain.mutex.Lock()
+	defer blockChain.mutex.Unlock()
+
+	filePath := filepath.Join(blockChain.dataPath, ChainFile)
+
+	// Check if file exists
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		// No blockchain file exists yet - not an error
+		return nil
+	}
+
+	// Read file
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return errors.New("failed to read blockchain file: " + err.Error())
+	}
+
+	// Unmarshal into blocks
+	var blocks []*Block
+	err = json.Unmarshal(data, &blocks)
+	if err != nil {
+		return errors.New("failed to unmarshal blockchain data: " + err.Error())
+	}
+
+	// Validate the loaded chain
+	if len(blocks) > 0 {
+		// Verify the genesis block
+		if blocks[0].Index != 0 || blocks[0].PrevHash != PrevHashOfGenesis {
+			return errors.New("invalid genesis block in stored chain")
+		}
+
+		// Verify the rest of the chain
+		for i := 1; i < len(blocks); i++ {
+			currentBlock := blocks[i]
+			previousBlock := blocks[i-1]
+
+			// Check block index
+			if currentBlock.Index != previousBlock.Index+1 {
+				return errors.New("invalid block index in stored chain")
+			}
+
+			// Check previous hash
+			if currentBlock.PrevHash != previousBlock.Hash {
+				return errors.New("invalid previous hash in stored chain")
+			}
+
+			// Verify block hash
+			calculatedHash := currentBlock.CalculateHash()
+			if hex.EncodeToString(calculatedHash) != currentBlock.Hash {
+				return errors.New("invalid block hash in stored chain")
+			}
+		}
+
+		// Set blocks and latest hash
+		blockChain.Blocks = blocks
+		blockChain.LatestHash = blocks[len(blocks)-1].Hash
+	}
+
+	return nil
+}
+
+// AddBlockWithAutoSave AutoSave saves the blockchain to disk after each block addition
+func (blockChain *Blockchain) AddBlockWithAutoSave(block *Block) error {
+	// First add the block to the chain
+	err := blockChain.AddBlock(block)
+	if err != nil {
+		return err
+	}
+
+	// Then save to disk
+	return blockChain.SaveToDisk()
 }

@@ -2,6 +2,9 @@ package block
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 	"weather-blockchain/account"
@@ -447,4 +450,291 @@ func TestHashCalculation(t *testing.T) {
 	assert.NotEmpty(t, genesisBlock.Hash, "Hash should be set after adding to blockchain")
 	assert.Equal(t, hex.EncodeToString(genesisBlock.CalculateHash()), genesisBlock.Hash,
 		"Stored hash should match calculated hash")
+}
+
+// TestSaveToDisk tests the SaveToDisk function
+func TestSaveToDisk(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+
+	// Create a new blockchain with the temp directory
+	bc := NewBlockchain(tempDir)
+
+	// Create a test account
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+
+	// Create and add genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	err = bc.AddBlock(genesisBlock)
+	require.NoError(t, err, "Should add genesis block without error")
+
+	// Add a second block
+	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2 Data")
+	require.NoError(t, err, "Should create second block without error")
+	err = bc.AddBlock(block2)
+	require.NoError(t, err, "Should add second block without error")
+
+	// Save the blockchain to disk
+	err = bc.SaveToDisk()
+	assert.NoError(t, err, "Should save blockchain to disk without error")
+
+	// Check if the file exists
+	filePath := filepath.Join(tempDir, ChainFile)
+	_, err = os.Stat(filePath)
+	assert.False(t, os.IsNotExist(err), "Blockchain file should exist")
+
+	// Read the saved file
+	fileData, err := os.ReadFile(filePath)
+	require.NoError(t, err, "Should read blockchain file without error")
+
+	// Unmarshal the data
+	var savedBlocks []*Block
+	err = json.Unmarshal(fileData, &savedBlocks)
+	require.NoError(t, err, "Should unmarshal blockchain data without error")
+
+	// Verify the saved data
+	assert.Len(t, savedBlocks, 2, "Saved blockchain should have 2 blocks")
+	assert.Equal(t, genesisBlock.Hash, savedBlocks[0].Hash, "Genesis block hash should match")
+	assert.Equal(t, block2.Hash, savedBlocks[1].Hash, "Second block hash should match")
+}
+
+// TestLoadFromDisk tests the LoadFromDisk function
+func TestLoadFromDisk(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+
+	// Create and save a blockchain
+	{
+		bc := NewBlockchain(tempDir)
+		acc, err := account.New()
+		require.NoError(t, err, "Should create account without error")
+
+		genesisBlock, err := CreateGenesisBlock(acc)
+		require.NoError(t, err, "Should create genesis block without error")
+		err = bc.AddBlock(genesisBlock)
+		require.NoError(t, err, "Should add genesis block without error")
+
+		block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2 Data")
+		require.NoError(t, err, "Should create second block without error")
+		err = bc.AddBlock(block2)
+		require.NoError(t, err, "Should add second block without error")
+
+		err = bc.SaveToDisk()
+		require.NoError(t, err, "Should save blockchain to disk without error")
+	}
+
+	// Create a new blockchain and load from disk
+	bc2 := NewBlockchain(tempDir)
+	err = bc2.LoadFromDisk()
+	assert.NoError(t, err, "Should load blockchain from disk without error")
+
+	// Verify the loaded blockchain
+	assert.Len(t, bc2.Blocks, 2, "Loaded blockchain should have 2 blocks")
+	assert.Equal(t, uint64(0), bc2.Blocks[0].Index, "First block should be genesis")
+	assert.Equal(t, uint64(1), bc2.Blocks[1].Index, "Second block should have index 1")
+	assert.Equal(t, bc2.Blocks[1].Hash, bc2.LatestHash, "Latest hash should match second block hash")
+}
+
+// TestLoadFromNonExistentFile tests loading from a non-existent file
+func TestLoadFromNonExistentFile(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+
+	// Create a new blockchain with the temp directory (no file exists yet)
+	bc := NewBlockchain(tempDir)
+
+	// Load from disk should not error when file doesn't exist
+	err = bc.LoadFromDisk()
+	assert.NoError(t, err, "LoadFromDisk should not error when file doesn't exist")
+	assert.Empty(t, bc.Blocks, "Blockchain should be empty when no file exists")
+}
+
+// TestLoadInvalidBlockchain tests loading an invalid blockchain
+func TestLoadInvalidBlockchain(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+
+	// Create an invalid blockchain file
+	invalidChain := []*Block{
+		{
+			Index:            1, // Should be 0 for genesis
+			Timestamp:        time.Now().Unix(),
+			PrevHash:         PrevHashOfGenesis,
+			ValidatorAddress: "testaddress",
+			Data:             "Invalid Genesis",
+			Hash:             "invaliddatahash",
+		},
+	}
+
+	invalidData, err := json.MarshalIndent(invalidChain, "", "  ")
+	require.NoError(t, err, "Should marshal invalid blockchain data without error")
+
+	// Write invalid data to file
+	filePath := filepath.Join(tempDir, ChainFile)
+	err = os.WriteFile(filePath, invalidData, 0644)
+	require.NoError(t, err, "Should write invalid blockchain data without error")
+
+	// Try to load the invalid blockchain
+	bc := NewBlockchain(tempDir)
+	err = bc.LoadFromDisk()
+	assert.Error(t, err, "LoadFromDisk should error with invalid blockchain")
+	assert.Contains(t, err.Error(), "invalid genesis block", "Error should mention invalid genesis block")
+}
+
+// TestAddBlockWithAutoSave tests the AddBlockWithAutoSave function
+func TestAddBlockWithAutoSave(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+
+	// Create a new blockchain with the temp directory
+	bc := NewBlockchain(tempDir)
+
+	// Create a test account
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+
+	// Create and add genesis block with auto-save
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	err = bc.AddBlockWithAutoSave(genesisBlock)
+	assert.NoError(t, err, "Should add genesis block with auto-save without error")
+
+	// Check if file exists after auto-save
+	filePath := filepath.Join(tempDir, ChainFile)
+	_, err = os.Stat(filePath)
+	assert.False(t, os.IsNotExist(err), "Blockchain file should exist after auto-save")
+
+	// Create another blockchain instance to load the saved file
+	bc2 := NewBlockchain(tempDir)
+	err = bc2.LoadFromDisk()
+	require.NoError(t, err, "Should load blockchain from disk without error")
+
+	// Verify the loaded blockchain
+	assert.Len(t, bc2.Blocks, 1, "Loaded blockchain should have 1 block")
+	assert.Equal(t, genesisBlock.Hash, bc2.Blocks[0].Hash, "Loaded block hash should match")
+
+	// Add a second block with auto-save
+	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2 Data")
+	require.NoError(t, err, "Should create second block without error")
+	err = bc2.AddBlockWithAutoSave(block2)
+	assert.NoError(t, err, "Should add second block with auto-save without error")
+
+	// Create a third blockchain instance to verify both blocks were saved
+	bc3 := NewBlockchain(tempDir)
+	err = bc3.LoadFromDisk()
+	require.NoError(t, err, "Should load blockchain from disk without error")
+
+	// Verify the loaded blockchain
+	assert.Len(t, bc3.Blocks, 2, "Loaded blockchain should have 2 blocks")
+	assert.Equal(t, block2.Hash, bc3.LatestHash, "Latest hash should match second block hash")
+}
+
+// TestInvalidBlockWithAutoSave tests that invalid blocks are not auto-saved
+func TestInvalidBlockWithAutoSave(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+
+	// Create a new blockchain with the temp directory
+	bc := NewBlockchain(tempDir)
+
+	// Create a test account
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+
+	// Create and add genesis block with auto-save
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	err = bc.AddBlockWithAutoSave(genesisBlock)
+	assert.NoError(t, err, "Should add genesis block with auto-save without error")
+
+	// Try to add an invalid block with auto-save
+	invalidBlock := &Block{
+		Index:            0, // Should be 1
+		Timestamp:        time.Now().Unix(),
+		PrevHash:         genesisBlock.Hash,
+		ValidatorAddress: acc.Address,
+		Data:             "Invalid Block",
+	}
+	invalidBlock.StoreHash()
+
+	// This should fail and not save
+	err = bc.AddBlockWithAutoSave(invalidBlock)
+	assert.Error(t, err, "Should not add invalid block with auto-save")
+
+	// Create another blockchain instance to verify only genesis was saved
+	bc2 := NewBlockchain(tempDir)
+	err = bc2.LoadFromDisk()
+	require.NoError(t, err, "Should load blockchain from disk without error")
+
+	// Verify the loaded blockchain
+	assert.Len(t, bc2.Blocks, 1, "Loaded blockchain should have only 1 block")
+	assert.Equal(t, genesisBlock.Hash, bc2.Blocks[0].Hash, "Loaded block hash should match genesis")
+}
+
+// TestConcurrentSaveAndLoad tests concurrent saving and loading operations
+func TestConcurrentSaveAndLoad(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+
+	// Create a new blockchain with the temp directory
+	bc := NewBlockchain(tempDir)
+
+	// Create a test account
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+
+	// Create and add genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	err = bc.AddBlock(genesisBlock)
+	require.NoError(t, err, "Should add genesis block without error")
+
+	// Create more blocks for testing
+	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2 Data")
+	require.NoError(t, err, "Should create second block without error")
+	err = bc.AddBlock(block2)
+	require.NoError(t, err, "Should add second block without error")
+
+	// Run concurrent operations
+	done := make(chan bool)
+	for i := 0; i < 5; i++ {
+		go func() {
+			// Load operation
+			_ = bc.LoadFromDisk()
+			done <- true
+		}()
+
+		go func() {
+			// Save operation
+			_ = bc.SaveToDisk()
+			done <- true
+		}()
+	}
+
+	// Wait for all goroutines to complete
+	for i := 0; i < 10; i++ {
+		<-done
+	}
+
+	// If we got here without deadlock, test passes
+	assert.True(t, true, "Concurrent save and load should not cause deadlock")
+
+	// Verify the blockchain is still intact
+	assert.Len(t, bc.Blocks, 2, "Blockchain should still have 2 blocks after concurrent operations")
 }
