@@ -1,4 +1,4 @@
-package main
+package network
 
 import (
 	"fmt"
@@ -119,24 +119,32 @@ func TestTwoNodesDiscovery(t *testing.T) {
 
 	// Check if nodes discovered each other
 	node1Discovered := false
-	for id := range node2.GetKnownNodes() {
+	node2DiscoveredByNode2 := false
+	for id := range node2.GetPeers() {
 		if id == id1 {
 			node1Discovered = true
 			break
+		} else if id == id2 {
+			node2DiscoveredByNode2 = true
 		}
 	}
 
 	node2Discovered := false
-	for id := range node1.GetKnownNodes() {
+	node1DiscoveredByNode1 := false
+	for id := range node1.GetPeers() {
 		if id == id2 {
 			node2Discovered = true
 			break
+		} else if id == id1 {
+			node1DiscoveredByNode1 = true
 		}
 	}
 
 	// This test might fail depending on network environment
-	assert.True(t, node1Discovered, "Node 1 should be discovered")
-	assert.True(t, node2Discovered, "Node 2 should be discovered")
+	assert.True(t, node1Discovered, "Node 1 should be discovered by node2")
+	assert.False(t, node2DiscoveredByNode2, "Node 2 should not be discovered by itself")
+	assert.True(t, node2Discovered, "Node 2 should be discovered by node1")
+	assert.False(t, node1DiscoveredByNode1, "Node 1 should be discovered by itself")
 }
 
 func TestThreeNodesDiscovery(t *testing.T) {
@@ -172,39 +180,51 @@ func TestThreeNodesDiscovery(t *testing.T) {
 	t.Log("Waiting for node discovery...")
 	time.Sleep(2 * MDNSDiscoverInterval)
 
+	node1DiscoveredByNode1 := false
 	node2DiscoveredByNode1 := false
 	node3DiscoveredByNode1 := false
-	for id := range node1.GetKnownNodes() {
+	for id := range node1.GetPeers() {
 		if id == id2 {
 			node2DiscoveredByNode1 = true
 		} else if id == id3 {
 			node3DiscoveredByNode1 = true
+		} else if id == id1 {
+			node1DiscoveredByNode1 = true
 		}
 	}
+	assert.False(t, node1DiscoveredByNode1, "Node 1 should not be discovered by node 1")
 	assert.True(t, node2DiscoveredByNode1, "Node 2 should be discovered by node 1")
 	assert.True(t, node3DiscoveredByNode1, "Node 3 should be discovered by node 1")
 
 	node1DiscoveredByNode2 := false
+	node2DiscoveredByNode2 := false
 	node3DiscoveredByNode2 := false
-	for id := range node2.GetKnownNodes() {
+	for id := range node2.GetPeers() {
 		if id == id1 {
 			node1DiscoveredByNode2 = true
 		} else if id == id3 {
 			node3DiscoveredByNode2 = true
+		} else if id == id2 {
+			node2DiscoveredByNode2 = true
 		}
 	}
 	assert.True(t, node1DiscoveredByNode2, "Node 1 should be discovered by node 2")
+	assert.False(t, node2DiscoveredByNode2, "Node 2 should not be discovered node 2")
 	assert.True(t, node3DiscoveredByNode2, "Node 3 should be discovered by node 2")
 
 	node1DiscoveredByNode3 := false
 	node2DiscoveredByNode3 := false
-	for id := range node3.GetKnownNodes() {
+	node3DiscoveredByNode3 := false
+	for id := range node3.GetPeers() {
 		if id == id1 {
 			node1DiscoveredByNode3 = true
 		} else if id == id2 {
 			node2DiscoveredByNode3 = true
+		} else if id == id3 {
+			node3DiscoveredByNode3 = true
 		}
 	}
 	assert.True(t, node1DiscoveredByNode3, "Node 1 should be discovered by node 3")
 	assert.True(t, node2DiscoveredByNode3, "Node 2 should be discovered by node 3")
+	assert.False(t, node3DiscoveredByNode3, "Node 3 should not be discovered by node 3")
 }
