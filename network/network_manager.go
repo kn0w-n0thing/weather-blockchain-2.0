@@ -1,6 +1,7 @@
 package network
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/hashicorp/mdns"
 	"io"
@@ -9,11 +10,43 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"weather-blockchain/block"
 )
+
+// MessageType Define message types for the network
+type MessageType int
+
+const (
+	MessageTypeBlock MessageType = iota
+	MessageTypeBlockRequest
+	MessageTypeBlockResponse
+)
+
+// Message represents a network message
+type Message struct {
+	Type    MessageType     `json:"type"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// BlockMessage contains a block to be broadcast
+type BlockMessage struct {
+	Block *block.Block `json:"block"`
+}
+
+// BlockRequestMessage is used to request a specific block
+type BlockRequestMessage struct {
+	Index uint64 `json:"index"`
+}
+
+// BlockResponseMessage is the response to a block request
+type BlockResponseMessage struct {
+	Block *block.Block `json:"block"`
+}
 
 const TcpNetwork = "tcp"
 
 const MDNSDiscoverInterval = 5 * time.Second
+const channelBufferSize = 10
 
 type MDSNService interface {
 	Shutdown() error
@@ -33,16 +66,20 @@ type Node struct {
 	server          MDSNService
 	serviceName     string
 	domain          string
+	outgoingBlocks  chan *block.Block // Channel for outgoing blocks
+	incomingBlocks  chan *block.Block // Channel for incoming blocks
 }
 
 // NewNode creates a new node
 func NewNode(id string, port int) *Node {
 	return &Node{
-		ID:          id,
-		Port:        port,
-		Peers:       make(map[string]string),             // ID -> IP address
-		serviceName: "_weather_blockchain_p2p_node._tcp", // Custom service type
-		domain:      "local.",                            // Standard mDNS domain
+		ID:             id,
+		Port:           port,
+		Peers:          make(map[string]string),             // ID -> IP address
+		serviceName:    "_weather_blockchain_p2p_node._tcp", // Custom service type
+		domain:         "local.",                            // Standard mDNS domain
+		outgoingBlocks: make(chan *block.Block, channelBufferSize),
+		incomingBlocks: make(chan *block.Block, channelBufferSize),
 	}
 }
 
@@ -111,43 +148,11 @@ func (node *Node) Start() error {
 	// Start discovering other nodes
 	go node.startDiscovery()
 
+	// Start the message broadcasting goroutine
+	go node.handleOutgoingBlocks()
+
 	log.Printf("P2P Node %s started on port %d", node.ID, node.Port)
 	return nil
-}
-
-// handleConnection processes incoming connections
-func (node *Node) handleConnection(connection net.Conn) {
-	defer func() {
-		connection.Close()
-
-		// Remove from connections list
-		node.connectionMutex.Lock()
-		for i, c := range node.connections {
-			if c == connection {
-				node.connections = append(node.connections[:i], node.connections[i+1:]...)
-				break
-			}
-		}
-		node.connectionMutex.Unlock()
-	}()
-
-	// Implement your connection handling logic here
-	// For example:
-	buffer := make([]byte, 1024)
-	for {
-		n, err := connection.Read(buffer)
-		if err != nil {
-			if err != io.EOF {
-				log.Printf("Error reading from connection: %v", err)
-			}
-			break
-		}
-
-		// Process the received data
-		data := buffer[:n]
-		// TODO: Handle the received data
-		log.Printf("Received data: %s", data)
-	}
 }
 
 // Stop closes the server's listener
@@ -279,4 +284,146 @@ func (node *Node) GetPeers() map[string]string {
 	}
 
 	return result
+}
+
+// BroadcastBlock sends a block to the outgoing channel for broadcasting
+func (node *Node) BroadcastBlock(blk *block.Block) {
+	select {
+	case node.outgoingBlocks <- blk:
+		log.Printf("Block with index %d queued for broadcast", blk.Index)
+	default:
+		log.Printf("Outgoing block channel full, couldn't queue block %d", blk.Index)
+	}
+}
+
+// GetIncomingBlocksChannel returns the channel for receiving incoming blocks
+func (node *Node) GetIncomingBlocksChannel() <-chan *block.Block {
+	return node.incomingBlocks
+}
+
+// handleOutgoingBlocks processes blocks in the outgoing channel
+func (node *Node) handleOutgoingBlocks() {
+	for {
+		select {
+		case <-node.stopChan:
+			return
+		case blk := <-node.outgoingBlocks:
+			// Broadcast the block to all peers
+			node.broadcastToAllPeers(blk)
+		}
+	}
+}
+
+// broadcastToAllPeers sends a block to all connected peers
+func (node *Node) broadcastToAllPeers(blk *block.Block) {
+	// Marshal the block
+	blockData, err := json.Marshal(blk)
+	if err != nil {
+		log.Printf("Failed to marshal block: %v", err)
+		return
+	}
+
+	// Create a message
+	msg := Message{
+		Type:    MessageTypeBlock,
+		Payload: blockData,
+	}
+
+	// Marshal the message
+	msgData, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("Failed to marshal message: %v", err)
+		return
+	}
+
+	// Get all peers
+	node.peerMutex.RLock()
+	peers := make(map[string]string)
+	for id, addr := range node.Peers {
+		peers[id] = addr
+	}
+	node.peerMutex.RUnlock()
+
+	// Send to each peer
+	for id, addr := range peers {
+		go func(peerID, peerAddr string) {
+			// Establish connection to peer
+			conn, err := net.Dial("tcp", peerAddr)
+			if err != nil {
+				log.Printf("Failed to connect to peer %s (%s): %v", peerID, peerAddr, err)
+				return
+			}
+			defer conn.Close()
+
+			// Send the message
+			_, err = conn.Write(msgData)
+			if err != nil {
+				log.Printf("Failed to send block to peer %s: %v", peerID, err)
+				return
+			}
+
+			log.Printf("Successfully sent block to peer %s", peerID)
+		}(id, addr)
+	}
+}
+
+// Modify handleConnection to process block messages
+func (node *Node) handleConnection(conn net.Conn) {
+	defer func() {
+		conn.Close()
+
+		// Remove from connections list
+		node.connectionMutex.Lock()
+		for i, c := range node.connections {
+			if c == conn {
+				node.connections = append(node.connections[:i], node.connections[i+1:]...)
+				break
+			}
+		}
+		node.connectionMutex.Unlock()
+	}()
+
+	// Create a JSON decoder for the connection
+	decoder := json.NewDecoder(conn)
+
+	// Read messages
+	for {
+		var msg Message
+		if err := decoder.Decode(&msg); err != nil {
+			if err != io.EOF {
+				log.Printf("Error decoding message: %v", err)
+			}
+			break
+		}
+
+		// Process based on message type
+		switch msg.Type {
+		case MessageTypeBlock:
+			// Parse the block
+			var blockMsg BlockMessage
+			if err := json.Unmarshal(msg.Payload, &blockMsg); err != nil {
+				log.Printf("Error unmarshaling block message: %v", err)
+				continue
+			}
+
+			// Send to incoming blocks channel
+			select {
+			case node.incomingBlocks <- blockMsg.Block:
+				log.Printf("Received block with index %d", blockMsg.Block.Index)
+			default:
+				log.Printf("Incoming block channel full, dropped block %d", blockMsg.Block.Index)
+			}
+
+		case MessageTypeBlockRequest:
+			// This would be implemented if you want block request functionality
+			log.Printf("Received block request - not implemented yet")
+
+		case MessageTypeBlockResponse:
+			// This would be implemented if you want block response functionality
+			log.Printf("Received block response - not implemented yet")
+
+		default:
+			log.Printf("Received unknown message type: %d", msg.Type)
+		}
+	}
 }
