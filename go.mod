@@ -3,6 +3,7 @@ module weather-blockchain
 go 1.24
 
 require (
+	github.com/beevik/ntp v1.4.3
 	github.com/hashicorp/mdns v1.0.6
 	github.com/stretchr/testify v1.10.0
 	github.com/urfave/cli/v2 v2.27.6
