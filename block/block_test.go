@@ -3,6 +3,7 @@ package block
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"testing"
 	"time"
 	"weather-blockchain/account"
@@ -240,4 +241,130 @@ func TestGenesisBlockSignatureVerification(t *testing.T) {
 	// Verify signature fails with a different account
 	isValidWithAccount2 := account2.VerifySignature(genesisBlock.CalculateHash(), genesisBlock.Signature)
 	assert.False(t, isValidWithAccount2, "Genesis block signature should be invalid with different account")
+}
+
+func TestBlockSign(t *testing.T) {
+	// Create a test block
+	testBlock := &Block{
+		Index:            1,
+		Timestamp:        1615000000,
+		PrevHash:         "abcdef1234567890",
+		ValidatorAddress: "testaddress123",
+		Data:             "Test Data",
+	}
+
+	// Calculate and store hash
+	testBlock.StoreHash()
+	
+	// Create a test private key
+	testPrivateKey := "test-private-key-12345"
+	
+	// Sign the block
+	testBlock.Sign(testPrivateKey)
+	
+	// Verify signature is not empty
+	assert.NotEmpty(t, testBlock.Signature, "Block signature should not be empty after signing")
+	
+	// Verify signature format - since our implementation creates a signature with a specific format
+	signatureStr := string(testBlock.Signature)
+	expectedPrefix := "signed-" + testBlock.Hash
+	assert.True(t, len(signatureStr) > len(expectedPrefix), 
+		"Signature should be longer than the prefix")
+	assert.Equal(t, expectedPrefix, signatureStr[:len(expectedPrefix)], 
+		"Signature should start with the expected prefix")
+	
+	// Verify that signature includes the private key (our implementation includes this)
+	assert.Contains(t, signatureStr, testPrivateKey, 
+		"Signature should contain the private key")
+	
+	// Verify full signature format
+	expectedSignature := fmt.Sprintf("signed-%s-with-%s", testBlock.Hash, testPrivateKey)
+	assert.Equal(t, expectedSignature, signatureStr, 
+		"Signature should match the expected format")
+}
+
+func TestBlockVerifySignature(t *testing.T) {
+	// Create a test block
+	testBlock := &Block{
+		Index:            1,
+		Timestamp:        1615000000,
+		PrevHash:         "abcdef1234567890",
+		ValidatorAddress: "testaddress123",
+		Data:             "Test Data",
+	}
+	
+	// Calculate and store hash
+	testBlock.StoreHash()
+	
+	// Create a test private key
+	testPrivateKey := "test-private-key-12345"
+	
+	// Sign the block
+	testBlock.Sign(testPrivateKey)
+	
+	// Verify signature with VerifySignature method
+	isValid := testBlock.VerifySignature()
+	assert.True(t, isValid, "Signature verification should pass for a correctly signed block")
+	
+	// Tamper with the hash and verify signature fails
+	originalHash := testBlock.Hash
+	testBlock.Hash = "tampered-hash"
+	isValidAfterTamper := testBlock.VerifySignature()
+	assert.False(t, isValidAfterTamper, "Signature verification should fail when hash is tampered")
+	
+	// Restore original hash and tamper with signature
+	testBlock.Hash = originalHash
+	testBlock.Signature = []byte("invalid-signature")
+	isValidWithTamperedSignature := testBlock.VerifySignature()
+	assert.False(t, isValidWithTamperedSignature, "Signature verification should fail with tampered signature")
+	
+	// Test with empty signature
+	testBlock.Signature = []byte{}
+	isValidWithEmptySignature := testBlock.VerifySignature()
+	assert.False(t, isValidWithEmptySignature, "Signature verification should fail with empty signature")
+}
+
+func TestSignAndVerifyConsistency(t *testing.T) {
+	// Create multiple blocks with the same content but different private keys
+	createAndVerifyBlock := func(privateKey string) {
+		block := &Block{
+			Index:            1,
+			Timestamp:        1615000000,
+			PrevHash:         "abcdef1234567890",
+			ValidatorAddress: "testaddress123",
+			Data:             "Test Data",
+		}
+		
+		block.StoreHash()
+		block.Sign(privateKey)
+		
+		isValid := block.VerifySignature()
+		assert.True(t, isValid, "Signature verification should pass with key: %s", privateKey)
+		
+		// Changing any field should invalidate the signature
+		originalData := block.Data
+		block.Data = "Modified Data"
+		block.StoreHash() // Recalculate hash after modifying data
+		
+		isValidAfterModification := block.VerifySignature()
+		assert.False(t, isValidAfterModification, 
+			"Signature should be invalid after block content is modified")
+		
+		// Restore original data but don't update hash
+		block.Data = originalData
+		isValidAfterRestoring := block.VerifySignature()
+		assert.False(t, isValidAfterRestoring, 
+			"Signature should still be invalid because hash wasn't updated")
+		
+		// Update hash and verify signature is valid again
+		block.StoreHash()
+		isValidAfterUpdatingHash := block.VerifySignature()
+		assert.True(t, isValidAfterUpdatingHash, 
+			"Signature should be valid after restoring original data and updating hash")
+	}
+	
+	// Test with different private keys
+	createAndVerifyBlock("private-key-1")
+	createAndVerifyBlock("another-private-key-2")
+	createAndVerifyBlock("third-private-key-3")
 }

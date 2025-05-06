@@ -3,6 +3,7 @@ package block
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"time"
 	"weather-blockchain/account"
@@ -11,13 +12,14 @@ import (
 const PrevHashOfGenesis = "0000000000000000000000000000000000000000000000000000000000000000"
 
 type Block struct {
-	Index            uint64
-	Timestamp        int64
-	PrevHash         string
-	ValidatorAddress string
-	Data             string
-	Signature        []byte
-	Hash             string
+	Index              uint64
+	Timestamp          int64
+	PrevHash           string
+	ValidatorAddress   string
+	Data               string
+	Signature          []byte
+	ValidatorPublicKey []byte
+	Hash               string
 }
 
 func (block *Block) CalculateHash() []byte {
@@ -60,4 +62,21 @@ func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
 func (block *Block) StoreHash() {
 	hashBytes := block.CalculateHash()
 	block.Hash = hex.EncodeToString(hashBytes)
+}
+
+// Sign signs a block with a private key
+func (block *Block) Sign(privateKey string) {
+	// For a real implementation, use proper cryptographic signing
+	// For simplicity in this prototype, we'll use a placeholder
+	signatureStr := fmt.Sprintf("signed-%s-with-%s", block.Hash, privateKey)
+	block.Signature = []byte(signatureStr)
+}
+
+// VerifySignature verifies the signature on a block
+func (block *Block) VerifySignature() bool {
+	// For a real implementation, use proper cryptographic verification
+	// For simplicity in this prototype, we'll use a placeholder check
+	signatureStr := string(block.Signature)
+	expectedPrefix := "signed-" + block.Hash
+	return len(signatureStr) > len(expectedPrefix) && signatureStr[:len(expectedPrefix)] == expectedPrefix
 }
