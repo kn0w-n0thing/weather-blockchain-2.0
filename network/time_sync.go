@@ -23,6 +23,7 @@ const (
 )
 
 // TimeSync implements Ethereum-inspired slot-based time synchronization
+// This struct implements the ITimeSync interface from validator_selection.go
 type TimeSync struct {
 	mutex           sync.RWMutex
 	externalSources map[string]bool     // External time sources (like NTP servers)
@@ -115,6 +116,7 @@ func (timeSync *TimeSync) IsTimeValid(timestamp time.Time) bool {
 }
 
 // GetCurrentSlot returns the current slot number
+// This method is part of the ITimeSync interface
 func (timeSync *TimeSync) GetCurrentSlot() uint64 {
 	timeSync.mutex.RLock()
 	defer timeSync.mutex.RUnlock()

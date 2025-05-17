@@ -54,7 +54,8 @@ type MDSNService interface {
 
 // Node represents a P2P node
 type Node struct {
-	ID              string
+	ID string
+	// Address
 	Port            int
 	listener        net.Listener
 	Peers           map[string]string // map[id]address
