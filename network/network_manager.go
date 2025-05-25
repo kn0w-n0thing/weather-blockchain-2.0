@@ -10,8 +10,7 @@ import (
 	"sync"
 	"time"
 	"weather-blockchain/block"
-
-	log "github.com/sirupsen/logrus"
+	"weather-blockchain/logger"
 )
 
 // MessageType Define message types for the network
@@ -80,7 +79,7 @@ func (node *Node) String() string {
 
 // NewNode creates a new node
 func NewNode(id string, port int) *Node {
-	log.WithFields(log.Fields{
+	logger.L.WithFields(logger.Fields{
 		"id":   id,
 		"port": port,
 	}).Debug("NewNode: Creating new p2p node")
@@ -95,7 +94,7 @@ func NewNode(id string, port int) *Node {
 		incomingBlocks: make(chan *block.Block, channelBufferSize),
 	}
 
-	log.WithFields(log.Fields{
+	logger.L.WithFields(logger.Fields{
 		"node":        node.String(),
 		"serviceType": node.serviceName,
 		"domain":      node.domain,
@@ -107,7 +106,7 @@ func NewNode(id string, port int) *Node {
 
 // Start begins to listen on the port
 func (node *Node) Start() error {
-	log.WithField("node", node.String()).Debug("Start: Starting P2P node")
+	logger.L.WithField("node", node.String()).Debug("Start: Starting P2P node")
 
 	var err error
 	node.stopChan = make(chan struct{})
@@ -115,44 +114,44 @@ func (node *Node) Start() error {
 	node.isRunning = true
 
 	listenAddr := fmt.Sprintf(":%d", node.Port)
-	log.WithField("address", listenAddr).Debug("Start: Creating TCP listener")
+	logger.L.WithField("address", listenAddr).Debug("Start: Creating TCP listener")
 
 	node.listener, err = net.Listen(TcpNetwork, listenAddr)
 	if err != nil {
-		log.WithFields(log.Fields{
+		logger.L.WithFields(logger.Fields{
 			"address": listenAddr,
 			"error":   err,
 		}).Error("Start: Failed to create TCP listener")
 		return err
 	}
 
-	log.WithField("address", node.listener.Addr()).Debug("Start: TCP listener created successfully")
+	logger.L.WithField("address", node.listener.Addr()).Debug("Start: TCP listener created successfully")
 
 	// Start accepting connections in a goroutine
 	go func() {
-		log.Debug("Start: Beginning to accept connections")
+		logger.L.Debug("Start: Beginning to accept connections")
 		for node.isRunning {
 			// Set a deadline to avoid blocking forever
 			deadlineTime := time.Now().Add(1 * time.Second)
 			node.listener.(*net.TCPListener).SetDeadline(deadlineTime)
 
-			log.WithField("deadline", deadlineTime).Debug("Connection acceptor: Set accept deadline")
+			logger.L.WithField("deadline", deadlineTime).Debug("Connection acceptor: Set accept deadline")
 
 			conn, err := node.listener.Accept()
 			if err != nil {
 				if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
 					// This is just a timeout, continue the loop
-					log.Debug("Connection acceptor: Timeout reached, continuing")
+					logger.L.Debug("Connection acceptor: Timeout reached, continuing")
 					continue
 				}
 				if node.isRunning {
-					log.WithField("error", err).Warn("Connection acceptor: Error accepting connection")
+					logger.L.WithField("error", err).Warn("Connection acceptor: Error accepting connection")
 				}
 				continue
 			}
 
 			remoteAddr := conn.RemoteAddr().String()
-			log.WithField("remoteAddr", remoteAddr).Debug("Connection acceptor: Accepted new connection")
+			logger.L.WithField("remoteAddr", remoteAddr).Debug("Connection acceptor: Accepted new connection")
 
 			// Add connection to our list
 			node.connectionMutex.Lock()
@@ -160,7 +159,7 @@ func (node *Node) Start() error {
 			connectionCount := len(node.connections)
 			node.connectionMutex.Unlock()
 
-			log.WithFields(log.Fields{
+			logger.L.WithFields(logger.Fields{
 				"remoteAddr":       remoteAddr,
 				"totalConnections": connectionCount,
 			}).Debug("Connection acceptor: Added connection to list")
@@ -172,7 +171,7 @@ func (node *Node) Start() error {
 
 	// Start advertising our node
 	info := []string{fmt.Sprintf("id=%s", node.ID)}
-	log.WithField("txtInfo", info).Debug("Start: Preparing mDNS service")
+	logger.L.WithField("txtInfo", info).Debug("Start: Preparing mDNS service")
 
 	service, err := mdns.NewMDNSService(
 		node.ID,          // Instance name
@@ -184,31 +183,31 @@ func (node *Node) Start() error {
 		info,             // TXT record info
 	)
 	if err != nil {
-		log.WithField("error", err).Error("Start: Failed to create mDNS service")
+		logger.L.WithField("error", err).Error("Start: Failed to create mDNS service")
 		return fmt.Errorf("failed to create mDNS service: %w", err)
 	}
 
-	log.Debug("Start: Created mDNS service")
+	logger.L.Debug("Start: Created mDNS service")
 
 	// Create the mDNS server
 	server, err := mdns.NewServer(&mdns.Config{Zone: service})
 	if err != nil {
-		log.WithField("error", err).Error("Start: Failed to create mDNS server")
+		logger.L.WithField("error", err).Error("Start: Failed to create mDNS server")
 		return fmt.Errorf("failed to create mDNS server: %w", err)
 	}
 	node.server = server
 
-	log.Debug("Start: Created mDNS server")
+	logger.L.Debug("Start: Created mDNS server")
 
 	// Start discovering other nodes
 	go node.startDiscovery()
-	log.Debug("Start: Started peer discovery process")
+	logger.L.Debug("Start: Started peer discovery process")
 
 	// Start the message broadcasting goroutine
 	go node.handleOutgoingBlocks()
-	log.Debug("Start: Started outgoing block handler")
+	logger.L.Debug("Start: Started outgoing block handler")
 
-	log.WithFields(log.Fields{
+	logger.L.WithFields(logger.Fields{
 		"nodeID": node.ID,
 		"port":   node.Port,
 	}).Info("P2P Node started successfully")
@@ -217,26 +216,26 @@ func (node *Node) Start() error {
 
 // Stop closes the server's listener
 func (node *Node) Stop() error {
-	log.WithField("node", node.String()).Debug("Stop: Stopping P2P node")
+	logger.L.WithField("node", node.String()).Debug("Stop: Stopping P2P node")
 
 	if !node.isRunning {
-		log.WithField("node", node.String()).Debug("Stop: Node already stopped")
+		logger.L.WithField("node", node.String()).Debug("Stop: Node already stopped")
 		return nil
 	}
 
 	node.isRunning = false
-	log.Debug("Stop: Setting isRunning to false")
+	logger.L.Debug("Stop: Setting isRunning to false")
 
-	log.Debug("Stop: Closing stop channel")
+	logger.L.Debug("Stop: Closing stop channel")
 	close(node.stopChan)
 
 	// Close all active connections
 	node.connectionMutex.Lock()
-	log.WithField("connectionCount", len(node.connections)).Debug("Stop: Closing all active connections")
+	logger.L.WithField("connectionCount", len(node.connections)).Debug("Stop: Closing all active connections")
 
 	for i, conn := range node.connections {
 		remoteAddr := conn.RemoteAddr().String()
-		log.WithFields(log.Fields{
+		logger.L.WithFields(logger.Fields{
 			"index":      i,
 			"remoteAddr": remoteAddr,
 		}).Debug("Stop: Closing connection")
@@ -245,35 +244,35 @@ func (node *Node) Stop() error {
 	}
 	node.connections = nil
 	node.connectionMutex.Unlock()
-	log.Debug("Stop: All connections closed")
+	logger.L.Debug("Stop: All connections closed")
 
 	// Close the listener
 	if node.listener != nil {
-		log.WithField("address", node.listener.Addr()).Debug("Stop: Closing listener")
+		logger.L.WithField("address", node.listener.Addr()).Debug("Stop: Closing listener")
 		node.listener.Close()
 		node.listener = nil
-		log.Debug("Stop: Listener closed")
+		logger.L.Debug("Stop: Listener closed")
 	}
 
 	// Shutdown mDNS server
 	if node.server != nil {
-		log.Debug("Stop: Shutting down mDNS server")
+		logger.L.Debug("Stop: Shutting down mDNS server")
 		err := node.server.Shutdown()
 		if err != nil {
-			log.WithField("error", err).Warn("Stop: Error shutting down mDNS server")
+			logger.L.WithField("error", err).Warn("Stop: Error shutting down mDNS server")
 		}
 		node.server = nil
-		log.Debug("Stop: mDNS server shut down")
+		logger.L.Debug("Stop: mDNS server shut down")
 	}
 
-	log.WithField("nodeID", node.ID).Info("P2P Node stopped")
+	logger.L.WithField("nodeID", node.ID).Info("P2P Node stopped")
 	return nil
 }
 
 // IsListening checks if the server is currently listening
 func (node *Node) IsListening() bool {
 	listening := node.listener != nil
-	log.WithFields(log.Fields{
+	logger.L.WithFields(logger.Fields{
 		"node":        node.String(),
 		"isListening": listening,
 	}).Debug("IsListening: Checking if node is listening")
@@ -282,29 +281,29 @@ func (node *Node) IsListening() bool {
 
 // startDiscovery begins looking for other nodes
 func (node *Node) startDiscovery() {
-	log.WithFields(log.Fields{
+	logger.L.WithFields(logger.Fields{
 		"node":     node.String(),
 		"interval": MDNSDiscoverInterval,
 	}).Debug("startDiscovery: Beginning node discovery process")
 
 	// Run an initial discovery
-	log.Debug("startDiscovery: Running initial discovery")
+	logger.L.Debug("startDiscovery: Running initial discovery")
 	node.discoverNodes()
 
 	// Then periodically discover nodes
-	log.Debug("startDiscovery: Setting up periodic discovery")
+	logger.L.Debug("startDiscovery: Setting up periodic discovery")
 	ticker := time.NewTicker(MDNSDiscoverInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		log.WithField("time", time.Now()).Debug("startDiscovery: Running periodic discovery")
+		logger.L.WithField("time", time.Now()).Debug("startDiscovery: Running periodic discovery")
 		node.discoverNodes()
 	}
 }
 
 // discoverNodes performs a single discovery cycle
 func (node *Node) discoverNodes() {
-	log.WithFields(log.Fields{
+	logger.L.WithFields(logger.Fields{
 		"node":    node.String(),
 		"service": node.serviceName,
 		"domain":  node.domain,
@@ -313,7 +312,7 @@ func (node *Node) discoverNodes() {
 	// Create a channel for the results
 	channelSize := 10
 	entriesCh := make(chan *mdns.ServiceEntry, channelSize)
-	log.WithField("channelSize", channelSize).Debug("discoverNodes: Created results channel")
+	logger.L.WithField("channelSize", channelSize).Debug("discoverNodes: Created results channel")
 
 	// Start the lookup
 	timeout := 50 * time.Millisecond
@@ -325,7 +324,7 @@ func (node *Node) discoverNodes() {
 		DisableIPv6: true,
 	}
 
-	log.WithFields(log.Fields{
+	logger.L.WithFields(logger.Fields{
 		"service":     params.Service,
 		"domain":      params.Domain,
 		"timeout":     params.Timeout,
@@ -334,7 +333,7 @@ func (node *Node) discoverNodes() {
 
 	err := mdns.Query(params)
 	if err != nil {
-		log.WithFields(log.Fields{
+		logger.L.WithFields(logger.Fields{
 			"error":   err,
 			"service": node.serviceName,
 			"domain":  node.domain,
@@ -342,16 +341,16 @@ func (node *Node) discoverNodes() {
 		return
 	}
 
-	log.Debug("discoverNodes: mDNS query started successfully")
+	logger.L.Debug("discoverNodes: mDNS query started successfully")
 
 	// Collect responses until timeout
 	discoveryTimeout := time.After(params.Timeout)
-	log.WithField("timeout", params.Timeout).Debug("discoverNodes: Set discovery timeout")
+	logger.L.WithField("timeout", params.Timeout).Debug("discoverNodes: Set discovery timeout")
 
 	for {
 		select {
 		case entry := <-entriesCh:
-			log.WithFields(log.Fields{
+			logger.L.WithFields(logger.Fields{
 				"entryName":   entry.Name,
 				"entryPort":   entry.Port,
 				"entryAddrV4": entry.AddrV4,
@@ -359,7 +358,7 @@ func (node *Node) discoverNodes() {
 
 			// Skip if no address found
 			if len(entry.AddrV4) == 0 {
-				log.WithFields(log.Fields{
+				logger.L.WithFields(logger.Fields{
 					"nodeID":    node.ID,
 					"entryName": entry.Name,
 				}).Warn("discoverNodes: Node does not have an IPv4 address")
@@ -368,46 +367,46 @@ func (node *Node) discoverNodes() {
 
 			// Extract node ID from TXT record
 			nodeID := ""
-			log.WithField("infoFields", entry.InfoFields).Debug("discoverNodes: Extracting node ID from TXT records")
+			logger.L.WithField("infoFields", entry.InfoFields).Debug("discoverNodes: Extracting node ID from TXT records")
 
 			for _, info := range entry.InfoFields {
 				if len(info) > 3 && info[:3] == "id=" {
 					nodeID = info[3:]
-					log.WithField("extractedID", nodeID).Debug("discoverNodes: Extracted node ID from TXT record")
+					logger.L.WithField("extractedID", nodeID).Debug("discoverNodes: Extracted node ID from TXT record")
 					break
 				}
 			}
 
 			// Skip if no ID or it's our own ID
 			if nodeID == "" {
-				log.Debug("discoverNodes: Skipping entry with no node ID")
+				logger.L.Debug("discoverNodes: Skipping entry with no node ID")
 				continue
 			}
 
 			if nodeID == node.ID {
-				log.WithField("nodeID", nodeID).Debug("discoverNodes: Skipping our own node")
+				logger.L.WithField("nodeID", nodeID).Debug("discoverNodes: Skipping our own node")
 				continue
 			}
 
 			// Determine IP address to use (prefer IPv4)
 			ip := entry.AddrV4
-			log.WithField("ip", ip).Debug("discoverNodes: Using IPv4 address")
+			logger.L.WithField("ip", ip).Debug("discoverNodes: Using IPv4 address")
 
 			// Format address
 			addr := net.JoinHostPort(ip.String(), strconv.Itoa(entry.Port))
-			log.WithField("formattedAddr", addr).Debug("discoverNodes: Formatted network address")
+			logger.L.WithField("formattedAddr", addr).Debug("discoverNodes: Formatted network address")
 
 			// Add to known nodes
 			node.peerMutex.Lock()
 			if _, exists := node.Peers[nodeID]; !exists {
 				node.Peers[nodeID] = addr
-				log.WithFields(log.Fields{
+				logger.L.WithFields(logger.Fields{
 					"localNodeID":      node.ID,
 					"discoveredNodeID": nodeID,
 					"address":          addr,
 				}).Info("discoverNodes: Discovered new peer node")
 			} else {
-				log.WithFields(log.Fields{
+				logger.L.WithFields(logger.Fields{
 					"nodeID":  nodeID,
 					"address": addr,
 				}).Debug("discoverNodes: Node already known, skipping")
@@ -416,7 +415,7 @@ func (node *Node) discoverNodes() {
 
 		case <-discoveryTimeout:
 			// Discovery timeout reached
-			log.Debug("discoverNodes: Discovery timeout reached, finishing cycle")
+			logger.L.Debug("discoverNodes: Discovery timeout reached, finishing cycle")
 			return
 		}
 	}
@@ -424,7 +423,7 @@ func (node *Node) discoverNodes() {
 
 // GetPeers returns a copy of the known nodes
 func (node *Node) GetPeers() map[string]string {
-	log.WithField("node", node.String()).Debug("GetPeers: Getting copy of known peer nodes")
+	logger.L.WithField("node", node.String()).Debug("GetPeers: Getting copy of known peer nodes")
 
 	node.peerMutex.Lock()
 	defer node.peerMutex.Unlock()
@@ -432,19 +431,19 @@ func (node *Node) GetPeers() map[string]string {
 	result := make(map[string]string)
 	for id, addr := range node.Peers {
 		result[id] = addr
-		log.WithFields(log.Fields{
+		logger.L.WithFields(logger.Fields{
 			"peerID":  id,
 			"address": addr,
 		}).Debug("GetPeers: Copying peer information")
 	}
 
-	log.WithField("peerCount", len(result)).Debug("GetPeers: Returning peer list")
+	logger.L.WithField("peerCount", len(result)).Debug("GetPeers: Returning peer list")
 	return result
 }
 
 // BroadcastBlock sends a block to the outgoing channel for broadcasting
 func (node *Node) BroadcastBlock(blk *block.Block) {
-	log.WithFields(log.Fields{
+	logger.L.WithFields(logger.Fields{
 		"node":       node.String(),
 		"blockIndex": blk.Index,
 		"blockHash":  blk.Hash,
@@ -453,12 +452,12 @@ func (node *Node) BroadcastBlock(blk *block.Block) {
 
 	select {
 	case node.outgoingBlocks <- blk:
-		log.WithFields(log.Fields{
+		logger.L.WithFields(logger.Fields{
 			"blockIndex": blk.Index,
 			"blockHash":  blk.Hash,
 		}).Info("BroadcastBlock: Block queued for broadcast")
 	default:
-		log.WithFields(log.Fields{
+		logger.L.WithFields(logger.Fields{
 			"blockIndex": blk.Index,
 			"blockHash":  blk.Hash,
 		}).Warn("BroadcastBlock: Outgoing block channel full, couldn't queue block")
@@ -467,7 +466,7 @@ func (node *Node) BroadcastBlock(blk *block.Block) {
 
 // GetIncomingBlocksChannel returns the channel for receiving incoming blocks
 func (node *Node) GetIncomingBlocksChannel() <-chan *block.Block {
-	log.WithFields(log.Fields{
+	logger.L.WithFields(logger.Fields{
 		"node":          node.String(),
 		"channelBuffer": cap(node.incomingBlocks),
 		"currentItems":  len(node.incomingBlocks),
@@ -477,15 +476,15 @@ func (node *Node) GetIncomingBlocksChannel() <-chan *block.Block {
 
 // handleOutgoingBlocks processes blocks in the outgoing channel
 func (node *Node) handleOutgoingBlocks() {
-	log.WithField("node", node.String()).Debug("handleOutgoingBlocks: Started outgoing block handler")
+	logger.L.WithField("node", node.String()).Debug("handleOutgoingBlocks: Started outgoing block handler")
 
 	for {
 		select {
 		case <-node.stopChan:
-			log.Debug("handleOutgoingBlocks: Received stop signal, exiting handler")
+			logger.L.Debug("handleOutgoingBlocks: Received stop signal, exiting handler")
 			return
 		case blk := <-node.outgoingBlocks:
-			log.WithFields(log.Fields{
+			logger.L.WithFields(logger.Fields{
 				"blockIndex": blk.Index,
 				"blockHash":  blk.Hash,
 			}).Debug("handleOutgoingBlocks: Received block for broadcasting")
@@ -498,7 +497,7 @@ func (node *Node) handleOutgoingBlocks() {
 
 // broadcastToAllPeers sends a block to all connected peers
 func (node *Node) broadcastToAllPeers(blk *block.Block) {
-	log.WithFields(log.Fields{
+	logger.L.WithFields(logger.Fields{
 		"node":       node.String(),
 		"blockIndex": blk.Index,
 		"blockHash":  blk.Hash,
@@ -507,49 +506,49 @@ func (node *Node) broadcastToAllPeers(blk *block.Block) {
 	// Marshal the block
 	blockData, err := json.Marshal(blk)
 	if err != nil {
-		log.WithFields(log.Fields{
+		logger.L.WithFields(logger.Fields{
 			"error":      err,
 			"blockIndex": blk.Index,
 		}).Error("broadcastToAllPeers: Failed to marshal block")
 		return
 	}
-	log.WithField("dataSize", len(blockData)).Debug("broadcastToAllPeers: Block marshalled successfully")
+	logger.L.WithField("dataSize", len(blockData)).Debug("broadcastToAllPeers: Block marshalled successfully")
 
 	// Create a message
 	msg := Message{
 		Type:    MessageTypeBlock,
 		Payload: blockData,
 	}
-	log.WithField("messageType", msg.Type).Debug("broadcastToAllPeers: Created block message")
+	logger.L.WithField("messageType", msg.Type).Debug("broadcastToAllPeers: Created block message")
 
 	// Marshal the message
 	msgData, err := json.Marshal(msg)
 	if err != nil {
-		log.WithFields(log.Fields{
+		logger.L.WithFields(logger.Fields{
 			"error":       err,
 			"messageType": msg.Type,
 		}).Error("broadcastToAllPeers: Failed to marshal message")
 		return
 	}
-	log.WithField("dataSize", len(msgData)).Debug("broadcastToAllPeers: Message marshalled successfully")
+	logger.L.WithField("dataSize", len(msgData)).Debug("broadcastToAllPeers: Message marshalled successfully")
 
 	// Get all peers
 	node.peerMutex.RLock()
 	peers := make(map[string]string)
 	for id, addr := range node.Peers {
 		peers[id] = addr
-		log.WithFields(log.Fields{
+		logger.L.WithFields(logger.Fields{
 			"peerID":  id,
 			"address": addr,
 		}).Debug("broadcastToAllPeers: Added peer to broadcast list")
 	}
 	node.peerMutex.RUnlock()
-	log.WithField("peerCount", len(peers)).Debug("broadcastToAllPeers: Collected peer list for broadcasting")
+	logger.L.WithField("peerCount", len(peers)).Debug("broadcastToAllPeers: Collected peer list for broadcasting")
 
 	// Send to each peer
 	for id, addr := range peers {
 		go func(peerID, peerAddr string) {
-			log.WithFields(log.Fields{
+			logger.L.WithFields(logger.Fields{
 				"peerID":     peerID,
 				"address":    peerAddr,
 				"blockIndex": blk.Index,
@@ -558,7 +557,7 @@ func (node *Node) broadcastToAllPeers(blk *block.Block) {
 			// Establish connection to peer
 			conn, err := net.Dial("tcp", peerAddr)
 			if err != nil {
-				log.WithFields(log.Fields{
+				logger.L.WithFields(logger.Fields{
 					"error":   err,
 					"peerID":  peerID,
 					"address": peerAddr,
@@ -566,12 +565,12 @@ func (node *Node) broadcastToAllPeers(blk *block.Block) {
 				return
 			}
 			defer conn.Close()
-			log.WithField("peerID", peerID).Debug("broadcastToAllPeers: Connected to peer successfully")
+			logger.L.WithField("peerID", peerID).Debug("broadcastToAllPeers: Connected to peer successfully")
 
 			// Send the message
 			n, err := conn.Write(msgData)
 			if err != nil {
-				log.WithFields(log.Fields{
+				logger.L.WithFields(logger.Fields{
 					"error":      err,
 					"peerID":     peerID,
 					"blockIndex": blk.Index,
@@ -579,7 +578,7 @@ func (node *Node) broadcastToAllPeers(blk *block.Block) {
 				return
 			}
 
-			log.WithFields(log.Fields{
+			logger.L.WithFields(logger.Fields{
 				"peerID":     peerID,
 				"blockIndex": blk.Index,
 				"bytesSent":  n,
@@ -591,13 +590,13 @@ func (node *Node) broadcastToAllPeers(blk *block.Block) {
 // handleConnection processes incoming connections and their messages
 func (node *Node) handleConnection(conn net.Conn) {
 	remoteAddr := conn.RemoteAddr().String()
-	log.WithFields(log.Fields{
+	logger.L.WithFields(logger.Fields{
 		"node":       node.String(),
 		"remoteAddr": remoteAddr,
 	}).Debug("handleConnection: Handling new connection")
 
 	defer func() {
-		log.WithField("remoteAddr", remoteAddr).Debug("handleConnection: Closing connection")
+		logger.L.WithField("remoteAddr", remoteAddr).Debug("handleConnection: Closing connection")
 		conn.Close()
 
 		// Remove from connections list
@@ -605,7 +604,7 @@ func (node *Node) handleConnection(conn net.Conn) {
 		removed := false
 		for i, c := range node.connections {
 			if c == conn {
-				log.WithFields(log.Fields{
+				logger.L.WithFields(logger.Fields{
 					"index":      i,
 					"remoteAddr": remoteAddr,
 				}).Debug("handleConnection: Removing connection from list")
@@ -618,7 +617,7 @@ func (node *Node) handleConnection(conn net.Conn) {
 		remaining := len(node.connections)
 		node.connectionMutex.Unlock()
 
-		log.WithFields(log.Fields{
+		logger.L.WithFields(logger.Fields{
 			"remoteAddr":           remoteAddr,
 			"removed":              removed,
 			"remainingConnections": remaining,
@@ -627,26 +626,26 @@ func (node *Node) handleConnection(conn net.Conn) {
 
 	// Create a JSON decoder for the connection
 	decoder := json.NewDecoder(conn)
-	log.Debug("handleConnection: Created JSON decoder for connection")
+	logger.L.Debug("handleConnection: Created JSON decoder for connection")
 
 	// Read messages
 	for {
 		var msg Message
-		log.WithField("remoteAddr", remoteAddr).Debug("handleConnection: Waiting for next message")
+		logger.L.WithField("remoteAddr", remoteAddr).Debug("handleConnection: Waiting for next message")
 
 		if err := decoder.Decode(&msg); err != nil {
 			if err != io.EOF {
-				log.WithFields(log.Fields{
+				logger.L.WithFields(logger.Fields{
 					"error":      err,
 					"remoteAddr": remoteAddr,
 				}).Error("handleConnection: Error decoding message")
 			} else {
-				log.WithField("remoteAddr", remoteAddr).Debug("handleConnection: Connection closed by peer (EOF)")
+				logger.L.WithField("remoteAddr", remoteAddr).Debug("handleConnection: Connection closed by peer (EOF)")
 			}
 			break
 		}
 
-		log.WithFields(log.Fields{
+		logger.L.WithFields(logger.Fields{
 			"messageType": msg.Type,
 			"payloadSize": len(msg.Payload),
 			"remoteAddr":  remoteAddr,
@@ -655,12 +654,12 @@ func (node *Node) handleConnection(conn net.Conn) {
 		// Process based on message type
 		switch msg.Type {
 		case MessageTypeBlock:
-			log.WithField("messageType", "Block").Debug("handleConnection: Processing block message")
+			logger.L.WithField("messageType", "Block").Debug("handleConnection: Processing block message")
 
 			// Parse the block
 			var blockMsg BlockMessage
 			if err := json.Unmarshal(msg.Payload, &blockMsg); err != nil {
-				log.WithFields(log.Fields{
+				logger.L.WithFields(logger.Fields{
 					"error":       err,
 					"payloadSize": len(msg.Payload),
 				}).Error("handleConnection: Error unmarshaling block message")
@@ -669,7 +668,7 @@ func (node *Node) handleConnection(conn net.Conn) {
 
 			blockIndex := blockMsg.Block.Index
 			blockHash := blockMsg.Block.Hash
-			log.WithFields(log.Fields{
+			logger.L.WithFields(logger.Fields{
 				"blockIndex": blockIndex,
 				"blockHash":  blockHash,
 			}).Debug("handleConnection: Unmarshaled block successfully")
@@ -677,12 +676,12 @@ func (node *Node) handleConnection(conn net.Conn) {
 			// Send to incoming blocks channel
 			select {
 			case node.incomingBlocks <- blockMsg.Block:
-				log.WithFields(log.Fields{
+				logger.L.WithFields(logger.Fields{
 					"blockIndex": blockIndex,
 					"blockHash":  blockHash,
 				}).Info("handleConnection: Received block queued for processing")
 			default:
-				log.WithFields(log.Fields{
+				logger.L.WithFields(logger.Fields{
 					"blockIndex": blockIndex,
 					"blockHash":  blockHash,
 				}).Warn("handleConnection: Incoming block channel full, dropped block")
@@ -690,14 +689,14 @@ func (node *Node) handleConnection(conn net.Conn) {
 
 		case MessageTypeBlockRequest:
 			// This would be implemented if you want block request functionality
-			log.WithField("messageType", "BlockRequest").Debug("handleConnection: Received block request (not implemented)")
+			logger.L.WithField("messageType", "BlockRequest").Debug("handleConnection: Received block request (not implemented)")
 
 		case MessageTypeBlockResponse:
 			// This would be implemented if you want block response functionality
-			log.WithField("messageType", "BlockResponse").Debug("handleConnection: Received block response (not implemented)")
+			logger.L.WithField("messageType", "BlockResponse").Debug("handleConnection: Received block response (not implemented)")
 
 		default:
-			log.WithField("messageType", msg.Type).Warn("handleConnection: Received unknown message type")
+			logger.L.WithField("messageType", msg.Type).Warn("handleConnection: Received unknown message type")
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 	"weather-blockchain/account"
 	"weather-blockchain/block"
+	"weather-blockchain/logger"
 	"weather-blockchain/network"
 )
 
@@ -38,11 +39,11 @@ func main() {
 				Usage: "Create the genesis block",
 			},
 		},
-		Action: func(c *cli.Context) error {
+		Action: func(context *cli.Context) error {
 			var acc *account.Account
 			var err error
 
-			if createPem := c.String("create-pem"); createPem != "" {
+			if createPem := context.String("create-pem"); createPem != "" {
 				acc, err = account.New()
 				if err != nil {
 					return err
@@ -56,7 +57,7 @@ func main() {
 			}
 
 			if acc == nil {
-				pem := c.String("pem")
+				pem := context.String("pem")
 				acc, err = account.LoadFromFile(pem)
 
 				if err != nil {
@@ -65,20 +66,20 @@ func main() {
 			}
 
 			if acc == nil {
-				log.Fatalf("Failed to create or load a pem file")
+				logger.L.Fatal("Failed to create or load a pem file")
 			}
 
-			if genesis := c.Bool("genesis"); genesis {
+			if genesis := context.Bool("genesis"); genesis {
 				var genesisBlock *block.Block
 				genesisBlock, err = block.CreateGenesisBlock(acc)
 				if err != nil {
-					log.Fatalf("Failed to create a genesis block: %v", err)
+					logger.L.WithError(err).Error("Failed to create a genesis block.")
 				}
 
 				blockchain := block.NewBlockchain()
 				err = blockchain.AddBlock(genesisBlock)
 				if err != nil {
-					log.Fatalf("Failed to add a genesis block: %v", err)
+					logger.L.WithError(err).Error("Failed to add a genesis block.")
 					return err
 				}
 				// Persist the genesis block
@@ -89,11 +90,11 @@ func main() {
 				//blockchain.AddBlock(genesisBlock)
 			}
 
-			port := c.Int("port")
+			port := context.Int("port")
 			node := network.NewNode(acc.Address, port)
 
 			if err := node.Start(); err != nil {
-				log.Fatalf("Failed to start node: %v", err)
+				logger.L.WithError(err).Error("Failed to start node.")
 			}
 			defer node.Stop()
 
@@ -109,17 +110,15 @@ func main() {
 				select {
 				case <-ticker.C:
 					nodes := node.GetPeers()
-					log.Printf("Known nodes (%d):", len(nodes))
+					logger.L.Debugf("Known node(%d):", len(nodes))
 					for id, addr := range nodes {
-						log.Printf("  - %s at %s", id, addr)
+						logger.L.WithFields(logger.Fields{"id": id, "address": addr}).Debug("Display peers.")
 					}
 				case <-signals:
-					log.Println("Shutting down...")
+					logger.L.Info("Shutting down...")
 					return nil
 				}
 			}
-
-			return nil
 		},
 	}
 
