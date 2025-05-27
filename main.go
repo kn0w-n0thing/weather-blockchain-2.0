@@ -2,9 +2,9 @@ package main
 
 import (
 	"github.com/urfave/cli/v2"
-	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 	"weather-blockchain/account"
@@ -13,18 +13,20 @@ import (
 	"weather-blockchain/network"
 )
 
+const PemKeyFileName = "key.pem"
+
 func main() {
 	app := &cli.App{
 		Name:  "weather-blockchain",
 		Usage: "Weather Blockchain client",
 		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:  "create-pem",
-				Value: "./key.pem",
+			&cli.BoolFlag{
+				Name:  "only-create-pem",
+				Value: false,
 				Usage: "create a pem file",
 			},
 			&cli.StringFlag{
-				Name:  "pem",
+				Name:  "load-pem",
 				Value: "./key.pem",
 				Usage: "key pem file path",
 			},
@@ -38,26 +40,34 @@ func main() {
 				Value: false,
 				Usage: "Create the genesis block",
 			},
+			&cli.StringFlag{
+				Name:  "blockchain-file",
+				Value: "",
+				Usage: "Path to a custom blockchain file to load (if not specified, uses default location)",
+			},
 		},
 		Action: func(context *cli.Context) error {
 			var acc *account.Account
 			var err error
 
-			if createPem := context.String("create-pem"); createPem != "" {
+			if createPem := context.Bool("only-create-pem"); createPem {
 				acc, err = account.New()
 				if err != nil {
 					return err
 				}
 
-				err = acc.SaveToFile(createPem)
+				err = acc.SaveToFile(PemKeyFileName)
 
 				if err != nil {
 					return err
 				}
+
+				logger.L.Info("Only create a pem file. Now quitting the client.")
+				return nil
 			}
 
 			if acc == nil {
-				pem := context.String("pem")
+				pem := context.String("load-pem")
 				acc, err = account.LoadFromFile(pem)
 
 				if err != nil {
@@ -67,27 +77,64 @@ func main() {
 
 			if acc == nil {
 				logger.L.Fatal("Failed to create or load a pem file")
+				return nil
 			}
 
+			var blockchain *block.Blockchain
+			
 			if genesis := context.Bool("genesis"); genesis {
 				var genesisBlock *block.Block
 				genesisBlock, err = block.CreateGenesisBlock(acc)
 				if err != nil {
 					logger.L.WithError(err).Error("Failed to create a genesis block.")
+					return err
 				}
 
-				blockchain := block.NewBlockchain()
+				blockchain = block.NewBlockchain()
 				err = blockchain.AddBlock(genesisBlock)
 				if err != nil {
 					logger.L.WithError(err).Error("Failed to add a genesis block.")
 					return err
 				}
-				// Persist the genesis block
-				//storage.SaveGenesisBlock(genesisBlock)
+				
+				// Save the blockchain with the genesis block
+				err = blockchain.SaveToDisk()
+				if err != nil {
+					logger.L.WithError(err).Error("Failed to save blockchain with genesis block.")
+					return err
+				}
+				
+				logger.L.Info("Genesis block created and saved successfully")
 			} else {
-				// Load existing genesis block
-				//genesisBlock := storage.LoadGenesisBlock()
-				//blockchain.AddBlock(genesisBlock)
+				// Check if a custom blockchain file was specified
+				var blockchainPath string
+				customFile := context.String("blockchain-file")
+				
+				if customFile != "" {
+					// Use the custom file path
+					blockchainPath = customFile
+					logger.L.WithField("filePath", blockchainPath).Info("Using custom blockchain file")
+				} else {
+					// Use the default location
+					blockchainPath = filepath.Join(block.DataDirectory, block.ChainFile)
+					logger.L.WithField("filePath", blockchainPath).Debug("Using default blockchain file location")
+				}
+				
+				// Load the blockchain from the specified path
+				blockchain, err = block.LoadBlockchainFromFile(blockchainPath)
+				if err != nil {
+					logger.L.WithError(err).Error("Failed to load blockchain from disk")
+					return err
+				}
+				
+				if len(blockchain.Blocks) == 0 {
+					logger.L.Warn("No blocks found in blockchain. This node should sync with the network.")
+				} else {
+					logger.L.WithFields(logger.Fields{
+						"blockCount": len(blockchain.Blocks),
+						"latestHash": blockchain.LatestHash,
+					}).Info("Blockchain loaded successfully")
+				}
 			}
 
 			port := context.Int("port")
@@ -123,6 +170,6 @@ func main() {
 	}
 
 	if err := app.Run(os.Args); err != nil {
-		log.Fatal(err)
+		logger.L.Fatal(err)
 	}
 }

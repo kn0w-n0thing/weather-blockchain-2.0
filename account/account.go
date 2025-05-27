@@ -49,10 +49,7 @@ func LoadFromFile(filePath string) (*Account, error) {
 	logger.L.WithField("file", filePath).Debug("Loading network identity from key file")
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		logger.L.WithFields(logger.Fields{
-			"file":  filePath,
-			"error": err,
-		}).Error("Failed to read private key file for network node")
+		logger.L.WithError(err).Error("Failed to read key file")
 		return nil, fmt.Errorf("failed to read private key file: %v", err)
 	}
 
@@ -134,7 +131,7 @@ func (a *Account) SaveToFile(filePath string) error {
 		return err
 	}
 
-	logger.L.WithField("file", filePath).Info("Successfully saved network node identity to file")
+	logger.L.WithField("file", filePath).Info("Successfully saved PEM to a file")
 	return nil
 }
 

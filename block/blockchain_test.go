@@ -725,3 +725,119 @@ func TestConcurrentSaveAndLoad(t *testing.T) {
 	// Verify the blockchain is still intact
 	assert.Len(t, bc.Blocks, 2, "Blockchain should still have 2 blocks after concurrent operations")
 }
+
+// TestLoadBlockchainFromFile tests the LoadBlockchainFromFile function
+func TestLoadBlockchainFromFile(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+
+	// Create a blockchain and add blocks
+	{
+		bc := NewBlockchain(tempDir)
+		acc, err := account.New()
+		require.NoError(t, err, "Should create account without error")
+
+		genesisBlock, err := CreateGenesisBlock(acc)
+		require.NoError(t, err, "Should create genesis block without error")
+		err = bc.AddBlock(genesisBlock)
+		require.NoError(t, err, "Should add genesis block without error")
+
+		block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2 Data")
+		require.NoError(t, err, "Should create second block without error")
+		err = bc.AddBlock(block2)
+		require.NoError(t, err, "Should add second block without error")
+
+		block3, err := createSignedBlock(2, block2.Hash, acc, "Block 3 Data")
+		require.NoError(t, err, "Should create third block without error")
+		err = bc.AddBlock(block3)
+		require.NoError(t, err, "Should add third block without error")
+
+		err = bc.SaveToDisk()
+		require.NoError(t, err, "Should save blockchain to disk without error")
+	}
+
+	// Test loading from standard file location
+	filePath := filepath.Join(tempDir, ChainFile)
+	loadedBC, err := LoadBlockchainFromFile(filePath)
+	assert.NoError(t, err, "Should load blockchain from file without error")
+	assert.NotNil(t, loadedBC, "Loaded blockchain should not be nil")
+	assert.Len(t, loadedBC.Blocks, 3, "Loaded blockchain should have 3 blocks")
+	assert.Equal(t, uint64(0), loadedBC.Blocks[0].Index, "First block should be genesis")
+	assert.Equal(t, uint64(2), loadedBC.Blocks[2].Index, "Third block should have index 2")
+
+	// Test loading from custom file location
+	// First, copy the file to a custom location
+	customFilePath := filepath.Join(tempDir, "custom_blockchain.json")
+	data, err := os.ReadFile(filePath)
+	require.NoError(t, err, "Should read original blockchain file without error")
+	err = os.WriteFile(customFilePath, data, 0644)
+	require.NoError(t, err, "Should write to custom blockchain file without error")
+
+	// Now load from the custom location
+	customLoadedBC, err := LoadBlockchainFromFile(customFilePath)
+	assert.NoError(t, err, "Should load blockchain from custom file without error")
+	assert.NotNil(t, customLoadedBC, "Loaded blockchain should not be nil")
+	assert.Len(t, customLoadedBC.Blocks, 3, "Loaded blockchain should have 3 blocks")
+
+	// Verify the content is the same
+	assert.Equal(t, loadedBC.Blocks[0].Hash, customLoadedBC.Blocks[0].Hash, "Genesis block hash should match")
+	assert.Equal(t, loadedBC.Blocks[1].Hash, customLoadedBC.Blocks[1].Hash, "Second block hash should match")
+	assert.Equal(t, loadedBC.Blocks[2].Hash, customLoadedBC.Blocks[2].Hash, "Third block hash should match")
+	assert.Equal(t, loadedBC.LatestHash, customLoadedBC.LatestHash, "Latest hash should match")
+}
+
+// TestLoadBlockchainFromNonExistentFile tests loading from a non-existent file
+func TestLoadBlockchainFromNonExistentFile(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+
+	// Attempt to load from a non-existent file
+	nonExistentPath := filepath.Join(tempDir, "non_existent.json")
+	_, err = LoadBlockchainFromFile(nonExistentPath)
+	assert.Error(t, err, "Should return error when file doesn't exist")
+	assert.Contains(t, err.Error(), "blockchain file not found", "Error should indicate file not found")
+
+	// Attempt to load from standard location when it doesn't exist
+	// TODO: is this case reasonable?
+	standardPath := filepath.Join(tempDir, ChainFile)
+	customLoadedBC, err := LoadBlockchainFromFile(standardPath)
+	assert.NoError(t, err)
+	assert.Len(t, customLoadedBC.Blocks, 0, "Loaded blockchain should have 0 blocks")
+}
+
+// TestLoadInvalidBlockchainFromFile tests loading an invalid blockchain from file
+func TestLoadInvalidBlockchainFromFile(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+
+	// Create an invalid blockchain file
+	invalidChain := []*Block{
+		{
+			Index:            1, // Should be 0 for genesis
+			Timestamp:        time.Now().Unix(),
+			PrevHash:         PrevHashOfGenesis,
+			ValidatorAddress: "testaddress",
+			Data:             "Invalid Genesis",
+			Hash:             "invaliddatahash",
+		},
+	}
+
+	invalidData, err := json.MarshalIndent(invalidChain, "", "  ")
+	require.NoError(t, err, "Should marshal invalid blockchain data without error")
+
+	// Write invalid data to file
+	customFilePath := filepath.Join(tempDir, "invalid_blockchain.json")
+	err = os.WriteFile(customFilePath, invalidData, 0644)
+	require.NoError(t, err, "Should write invalid blockchain data without error")
+
+	// Try to load the invalid blockchain
+	_, err = LoadBlockchainFromFile(customFilePath)
+	assert.Error(t, err, "Should return error when loading invalid blockchain")
+	assert.Contains(t, err.Error(), "invalid genesis block", "Error should mention invalid genesis block")
+}

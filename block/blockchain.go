@@ -23,7 +23,7 @@ type Blockchain struct {
 	dataPath   string
 }
 
-// NewBlockchain creates a new blockchain with the genesis block
+// NewBlockchain creates an empty blockchain
 func NewBlockchain(dataPath ...string) *Blockchain {
 	logger.L.Debug("Creating new blockchain")
 	path := DataDirectory // Default path
@@ -487,4 +487,125 @@ func (blockchain *Blockchain) AddBlockWithAutoSave(block *Block) error {
 
 	logger.L.WithField("blockIndex", block.Index).Info("Block added and blockchain saved to disk successfully")
 	return nil
+}
+
+// LoadBlockchainFromFile creates a new blockchain instance and loads it directly from the specified file
+func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
+	logger.L.WithField("filePath", filePath).Info("Loading blockchain directly from file")
+	
+	// Get the directory path from the file path
+	dirPath := filepath.Dir(filePath)
+	
+	// Create a new blockchain instance with the directory path
+	blockchain := NewBlockchain(dirPath)
+	
+	// Check if the filename is the default one
+	if filepath.Base(filePath) != ChainFile {
+		// Using a custom filename
+		customFileName := filepath.Base(filePath)
+		logger.L.WithFields(logger.Fields{
+			"customFile": customFileName,
+			"defaultFile": ChainFile,
+		}).Debug("Using custom blockchain filename")
+		
+		// Check if file exists
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			logger.L.WithField("filePath", filePath).Error("Blockchain file not found")
+			return nil, errors.New("blockchain file not found: " + filePath)
+		}
+		
+		// Read file
+		logger.L.WithField("filePath", filePath).Debug("Reading blockchain file")
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			logger.L.WithFields(logger.Fields{
+				"filePath": filePath,
+				"error":    err.Error(),
+			}).Error("Failed to read blockchain file")
+			return nil, errors.New("failed to read blockchain file: " + err.Error())
+		}
+		
+		// Unmarshal into blocks
+		logger.L.WithField("dataSize", len(data)).Debug("Unmarshaling blockchain data")
+		var blocks []*Block
+		err = json.Unmarshal(data, &blocks)
+		if err != nil {
+			logger.L.WithError(err).Error("Failed to unmarshal blockchain data")
+			return nil, errors.New("failed to unmarshal blockchain data: " + err.Error())
+		}
+		
+		// Validate the loaded chain
+		if len(blocks) > 0 {
+			logger.L.WithField("blockCount", len(blocks)).Debug("Validating loaded blockchain")
+			
+			// Verify the genesis block
+			if blocks[0].Index != 0 || blocks[0].PrevHash != PrevHashOfGenesis {
+				logger.L.WithFields(logger.Fields{
+					"genesisIndex":     blocks[0].Index,
+					"genesisPrevHash":  blocks[0].PrevHash,
+					"expectedPrevHash": PrevHashOfGenesis,
+				}).Error("Invalid genesis block in stored chain")
+				return nil, errors.New("invalid genesis block in stored chain")
+			}
+			
+			// Verify the rest of the chain
+			for i := 1; i < len(blocks); i++ {
+				currentBlock := blocks[i]
+				previousBlock := blocks[i-1]
+				
+				// Check block index
+				if currentBlock.Index != previousBlock.Index+1 {
+					logger.L.WithFields(logger.Fields{
+						"blockIndex":    currentBlock.Index,
+						"prevIndex":     previousBlock.Index,
+						"expectedIndex": previousBlock.Index + 1,
+					}).Error("Invalid block index in stored chain")
+					return nil, errors.New("invalid block index in stored chain")
+				}
+				
+				// Check previous hash
+				if currentBlock.PrevHash != previousBlock.Hash {
+					logger.L.WithFields(logger.Fields{
+						"blockPrevHash": currentBlock.PrevHash,
+						"prevBlockHash": previousBlock.Hash,
+					}).Error("Invalid previous hash in stored chain")
+					return nil, errors.New("invalid previous hash in stored chain")
+				}
+				
+				// Verify block hash
+				calculatedHash := currentBlock.CalculateHash()
+				calculatedHashHex := hex.EncodeToString(calculatedHash)
+				
+				if calculatedHashHex != currentBlock.Hash {
+					logger.L.WithFields(logger.Fields{
+						"blockHash":      currentBlock.Hash,
+						"calculatedHash": calculatedHashHex,
+					}).Error("Invalid block hash in stored chain")
+					return nil, errors.New("invalid block hash in stored chain")
+				}
+			}
+			
+			// Set blockchain data
+			blockchain.mutex.Lock()
+			blockchain.Blocks = blocks
+			blockchain.LatestHash = blocks[len(blocks)-1].Hash
+			blockchain.mutex.Unlock()
+			
+			logger.L.WithFields(logger.Fields{
+				"blockCount": len(blocks),
+				"latestHash": blockchain.LatestHash,
+			}).Info("Blockchain successfully loaded from custom file")
+		} else {
+			logger.L.Warn("Loaded blockchain file contains no blocks")
+		}
+	} else {
+		// Load using the standard method
+		err := blockchain.LoadFromDisk()
+		if err != nil {
+			logger.L.WithError(err).Error("Failed to load blockchain from disk")
+			return nil, err
+		}
+	}
+	
+	return blockchain, nil
 }
