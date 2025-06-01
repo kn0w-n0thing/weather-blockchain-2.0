@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 	"weather-blockchain/logger"
 )
 
@@ -29,7 +30,10 @@ type ValidatorSelection struct {
 	currentEpoch  *Epoch
 	nextEpoch     *Epoch
 	slotsPerEpoch uint64
+	running  bool
+	stopChan chan struct{}
 }
+
 
 // String returns a string representation of the Epoch struct
 func (epoch *Epoch) String() string {
@@ -61,6 +65,8 @@ func NewValidatorSelection(timeSync ITimeSync, node *Node) *ValidatorSelection {
 		timeSync:      timeSync,
 		node:          node,
 		slotsPerEpoch: 32, // Use a fixed number of slots per epoch
+		running:       false,
+		stopChan:      make(chan struct{}),
 	}
 
 	// Initialize first epoch
@@ -68,6 +74,7 @@ func NewValidatorSelection(timeSync ITimeSync, node *Node) *ValidatorSelection {
 
 	return vs
 }
+
 
 // buildCurrentEpoch creates a network epoch snapshot for current slot
 func (vs *ValidatorSelection) buildCurrentEpoch() {
@@ -87,8 +94,13 @@ func (vs *ValidatorSelection) buildCurrentEpoch() {
 		"endSlot":     endSlot,
 	}).Debug("buildCurrentEpoch: Calculated epoch boundaries")
 
-	// Get current participants
+	// Get current participants (include local node + all peers)
 	var participants []string
+	
+	// Always include the local node as a participant
+	participants = append(participants, vs.node.ID)
+	
+	// Add all discovered peers
 	for _, value := range vs.node.Peers {
 		participants = append(participants, value)
 	}
@@ -286,18 +298,113 @@ func (vs *ValidatorSelection) IsLocalNodeValidatorForCurrentSlot() bool {
 func (vs *ValidatorSelection) Start() {
 	logger.L.Debug("Start: Starting validator selection service")
 
-	// Build initial epoch
-	vs.buildCurrentEpoch()
+	// Only build initial epoch if we don't have one yet
+	if vs.currentEpoch == nil {
+		vs.buildCurrentEpoch()
+	}
+
+	// Start the validator monitoring goroutine
+	vs.running = true
+	go vs.monitorValidatorSelection()
 
 	logger.L.WithFields(logger.Fields{
 		"validator": vs.String(),
 	}).Info("Validator selection service started")
-
-	// In a full implementation, you might:
-	// 1. Periodically prepare the next epoch before it's needed
-	// 2. Share epoch data with other nodes to ensure consensus
-	// 3. Handle epoch transitions smoothly
 }
+
+// Stop stops the validator selection service
+func (vs *ValidatorSelection) Stop() {
+	logger.L.Debug("Stop: Stopping validator selection service")
+
+	if vs.running {
+		vs.running = false
+		close(vs.stopChan)
+		logger.L.Info("Validator selection service stopped")
+	}
+}
+
+// monitorValidatorSelection continuously monitors for validator selection and generates blocks
+func (vs *ValidatorSelection) monitorValidatorSelection() {
+	logger.L.WithField("nodeID", vs.node.ID).Debug("monitorValidatorSelection: Starting validator monitoring loop")
+
+	// Initialize lastSlot to an invalid value to ensure first slot is always processed
+	var lastSlot uint64 = ^uint64(0) // Max uint64 value to ensure first slot comparison triggers
+
+	// Check initial slot immediately when starting
+	currentSlot := vs.timeSync.GetCurrentSlot()
+	logger.L.WithFields(logger.Fields{
+		"initialSlot": currentSlot,
+		"lastSlot":    lastSlot,
+		"nodeID":      vs.node.ID,
+	}).Debug("monitorValidatorSelection: Initial slot check")
+	
+	if currentSlot != lastSlot {
+		vs.ProcessSlotTransition(lastSlot, currentSlot)
+		lastSlot = currentSlot
+	}
+
+	for vs.running {
+		select {
+		case <-vs.stopChan:
+			logger.L.Debug("monitorValidatorSelection: Received stop signal")
+			return
+		default:
+			currentSlot := vs.timeSync.GetCurrentSlot()
+
+			// Check if we've moved to a new slot
+			if currentSlot != lastSlot {
+				logger.L.WithFields(logger.Fields{
+					"previousSlot": lastSlot,
+					"currentSlot":  currentSlot,
+					"nodeID":       vs.node.ID,
+				}).Debug("monitorValidatorSelection: Slot change detected in loop")
+				vs.ProcessSlotTransition(lastSlot, currentSlot)
+				lastSlot = currentSlot
+			}
+
+			// Sleep briefly to avoid busy waiting
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
+	logger.L.Debug("monitorValidatorSelection: Validator monitoring loop ended")
+}
+
+// ProcessSlotTransition handles the logic when a slot transition is detected
+func (vs *ValidatorSelection) ProcessSlotTransition(previousSlot, currentSlot uint64) {
+	logger.L.WithFields(logger.Fields{
+		"previousSlot": previousSlot,
+		"currentSlot":  currentSlot,
+		"nodeID":       vs.node.ID,
+	}).Debug("processSlotTransition: Detected slot transition")
+
+	// Update epoch if needed for the current slot
+	vs.updateEpochIfNeeded(currentSlot)
+
+	// Check if we're the validator for this slot
+	isValidator := vs.IsLocalNodeValidatorForSlot(currentSlot)
+	logger.L.WithFields(logger.Fields{
+		"currentSlot": currentSlot,
+		"nodeID":      vs.node.ID,
+		"isValidator": isValidator,
+	}).Debug("processSlotTransition: Validator check result")
+	
+	if isValidator {
+		logger.L.WithFields(logger.Fields{
+			"currentSlot": currentSlot,
+			"nodeID":      vs.node.ID,
+		}).Info("processSlotTransition: Node selected as validator for current slot")
+		
+		// Note: Block generation is handled by the Consensus Engine, not here
+		// ValidatorSelection is only responsible for determining validator status
+	} else {
+		logger.L.WithFields(logger.Fields{
+			"currentSlot": currentSlot,
+			"nodeID":      vs.node.ID,
+		}).Debug("processSlotTransition: Node not selected as validator for current slot")
+	}
+}
+
 
 // GetEpochHash returns the current epoch hash
 // Other nodes can compare this to verify they have the same participant view

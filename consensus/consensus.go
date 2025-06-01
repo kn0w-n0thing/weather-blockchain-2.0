@@ -12,28 +12,34 @@ import (
 // TimeSync defines the interface needed for time synchronization
 type TimeSync interface {
 	GetNetworkTime() time.Time
-	IsValidatorForCurrentSlot() bool
 	GetCurrentSlot() uint64
 	GetTimeToNextSlot() time.Duration
 	GetSlotStartTime(slot uint64) time.Time
 	IsTimeValid(time.Time) bool
 }
 
+// ValidatorSelection defines the interface needed for validator selection
+type ValidatorSelection interface {
+	IsLocalNodeValidatorForCurrentSlot() bool
+	GetValidatorForSlot(slot uint64) string
+}
+
 // Engine manages the PoS consensus mechanism
 type Engine struct {
-	blockchain       *block.Blockchain
-	timeSync         TimeSync
-	validatorID      string
-	validatorPubKey  []byte
-	validatorPrivKey string                    // In production, use proper key management
-	pendingBlocks    map[string]*block.Block   // Blocks waiting for validation
-	forks            map[uint64][]*block.Block // Competing chains at each height
-	mutex            sync.RWMutex
+	blockchain          *block.Blockchain
+	timeSync            TimeSync
+	validatorSelection  ValidatorSelection
+	validatorID         string
+	validatorPublicKey  []byte
+	validatorPrivateKey []byte                    // In production, use proper key management
+	pendingBlocks       map[string]*block.Block   // Blocks waiting for validation
+	forks               map[uint64][]*block.Block // Competing chains at each height
+	mutex               sync.RWMutex
 }
 
 // NewConsensusEngine creates a new consensus engine
-func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync,
-	validatorID string, pubKey []byte, privKey string) *Engine {
+func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validatorSelection ValidatorSelection,
+	validatorID string, pubKey []byte, private []byte) *Engine {
 
 	logger.L.WithFields(logger.Fields{
 		"validatorID": validatorID,
@@ -41,13 +47,14 @@ func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync,
 	}).Debug("Creating new consensus engine")
 
 	engine := &Engine{
-		blockchain:       blockchain,
-		timeSync:         timeSync,
-		validatorID:      validatorID,
-		validatorPubKey:  pubKey,
-		validatorPrivKey: privKey,
-		pendingBlocks:    make(map[string]*block.Block),
-		forks:            make(map[uint64][]*block.Block),
+		blockchain:          blockchain,
+		timeSync:            timeSync,
+		validatorSelection:  validatorSelection,
+		validatorID:         validatorID,
+		validatorPublicKey:  pubKey,
+		validatorPrivateKey: private,
+		pendingBlocks:       make(map[string]*block.Block),
+		forks:               make(map[uint64][]*block.Block),
 	}
 
 	logger.L.WithField("validatorID", validatorID).Info("Consensus engine created")
@@ -82,7 +89,7 @@ func (ce *Engine) monitorSlots() {
 			"validatorID": ce.validatorID,
 		}).Debug("Checking if node is validator for current slot")
 
-		if ce.timeSync.IsValidatorForCurrentSlot() {
+		if ce.validatorSelection.IsLocalNodeValidatorForCurrentSlot() {
 			logger.L.WithFields(logger.Fields{
 				"validatorID": ce.validatorID,
 				"currentSlot": currentSlot,
@@ -132,6 +139,12 @@ func (ce *Engine) createNewBlock(message string) {
 
 	// Get latest block
 	latestBlock := ce.blockchain.GetLatestBlock()
+	if latestBlock == nil {
+		logger.L.Error("Cannot create new block: no genesis block found in blockchain")
+		logger.L.Error("Please run the client with --genesis flag to create a genesis block first")
+		return
+	}
+	
 	logger.L.WithFields(logger.Fields{
 		"latestBlockIndex": latestBlock.Index,
 		"latestBlockHash":  latestBlock.Hash,
@@ -149,14 +162,18 @@ func (ce *Engine) createNewBlock(message string) {
 		"validator": ce.validatorID,
 	}).Debug("Assembling new block")
 
+	// TODO: Consider adding more structured data format and metadata tracking
+	timestampStr := time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
+	dataWithTimestamp := fmt.Sprintf("%s - Modified at: %s", message, timestampStr)
+	
 	newBlock := &block.Block{
 		Index:              newBlockIndex,
 		Timestamp:          timestamp,
 		PrevHash:           latestBlock.Hash,
-		Data:               message,
+		Data:               dataWithTimestamp,
 		ValidatorAddress:   ce.validatorID,
-		Signature:          []byte{},           // Will be set below
-		ValidatorPublicKey: ce.validatorPubKey, // Store public key
+		Signature:          []byte{},              // Will be set below
+		ValidatorPublicKey: ce.validatorPublicKey, // Store public key
 	}
 
 	// Calculate and store hash first
@@ -209,7 +226,7 @@ func (ce *Engine) signBlock(b *block.Block) {
 
 	/*
 		// Parse private key (assuming ECDSA key in PEM format)
-		block, _ := pem.Decode([]byte(ce.validatorPrivKey))
+		block, _ := pem.Decode([]byte(ce.validatorPrivateKey))
 		privateKey, _ := x509.ParseECPrivateKey(block.Bytes)
 
 		// Create a hash of block data (excluding signature)

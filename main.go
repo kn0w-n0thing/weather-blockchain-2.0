@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/x509"
 	"github.com/urfave/cli/v2"
 	"os"
 	"os/signal"
@@ -9,6 +10,7 @@ import (
 	"time"
 	"weather-blockchain/account"
 	"weather-blockchain/block"
+	"weather-blockchain/consensus"
 	"weather-blockchain/logger"
 	"weather-blockchain/network"
 )
@@ -81,7 +83,7 @@ func main() {
 			}
 
 			var blockchain *block.Blockchain
-			
+
 			if genesis := context.Bool("genesis"); genesis {
 				var genesisBlock *block.Block
 				genesisBlock, err = block.CreateGenesisBlock(acc)
@@ -96,20 +98,20 @@ func main() {
 					logger.L.WithError(err).Error("Failed to add a genesis block.")
 					return err
 				}
-				
+
 				// Save the blockchain with the genesis block
 				err = blockchain.SaveToDisk()
 				if err != nil {
 					logger.L.WithError(err).Error("Failed to save blockchain with genesis block.")
 					return err
 				}
-				
+
 				logger.L.Info("Genesis block created and saved successfully")
 			} else {
 				// Check if a custom blockchain file was specified
 				var blockchainPath string
 				customFile := context.String("blockchain-file")
-				
+
 				if customFile != "" {
 					// Use the custom file path
 					blockchainPath = customFile
@@ -119,14 +121,14 @@ func main() {
 					blockchainPath = filepath.Join(block.DataDirectory, block.ChainFile)
 					logger.L.WithField("filePath", blockchainPath).Debug("Using default blockchain file location")
 				}
-				
+
 				// Load the blockchain from the specified path
 				blockchain, err = block.LoadBlockchainFromFile(blockchainPath)
 				if err != nil {
 					logger.L.WithError(err).Error("Failed to load blockchain from disk")
 					return err
 				}
-				
+
 				if len(blockchain.Blocks) == 0 {
 					logger.L.Warn("No blocks found in blockchain. This node should sync with the network.")
 				} else {
@@ -142,8 +144,33 @@ func main() {
 
 			if err := node.Start(); err != nil {
 				logger.L.WithError(err).Error("Failed to start node.")
+				return err
 			}
 			defer node.Stop()
+
+			timeSync := network.NewTimeSync(node)
+			if err := timeSync.Start(); err != nil {
+				logger.L.WithError(err).Error("Failed to start time sync.")
+				return err
+			}
+
+			// Create and start ValidatorSelection service
+			validatorSelection := network.NewValidatorSelection(timeSync, node)
+			validatorSelection.Start()
+
+			privateKey, err := x509.MarshalECPrivateKey(acc.PrivateKey)
+			if err != nil {
+				logger.L.WithError(err).Error("Failed to marshal private key.")
+			}
+			publicKey, err := x509.MarshalPKIXPublicKey(acc.PublicKey)
+			if err != nil {
+				logger.L.WithError(err).Error("Failed to marshal public key.")
+			}
+			consensusEngine := consensus.NewConsensusEngine(blockchain, timeSync, validatorSelection, node.ID, publicKey, privateKey)
+			if err = consensusEngine.Start(); err != nil {
+				logger.L.WithError(err).Error("Failed to start consensus engine.")
+				return err
+			}
 
 			// Setup signal handling for graceful shutdown
 			signals := make(chan os.Signal, 1)

@@ -23,6 +23,12 @@ const (
 	SlotsPerEpoch = 32
 )
 
+// NetworkManager interface defines methods needed to access network peers
+type NetworkManager interface {
+	GetPeers() map[string]string
+	GetID() string
+}
+
 // TimeSync implements Ethereum-inspired slot-based time synchronization
 // This struct implements the ITimeSync interface from validator_selection.go
 type TimeSync struct {
@@ -34,8 +40,9 @@ type TimeSync struct {
 	lastSyncTime    time.Time           // Last time we synced with external source
 	currentEpoch    uint64              // Current epoch number
 	currentSlot     uint64              // Current slot number
-	validatorID     string              // This node's validator ID
+	ValidatorID     string              // This node's validator ID
 	validatorSlot   map[uint64][]string // Map of slots to validators assigned to them
+	networkManager  NetworkManager      // Reference to network manager for accessing peers
 }
 
 var NtpServerSource = [3]string{
@@ -50,17 +57,23 @@ func (timeSync *TimeSync) String() string {
 	defer timeSync.mutex.RUnlock()
 
 	return fmt.Sprintf("TimeSync{Epoch: %d, Slot: %d, ValidatorID: %s, Sources: %d}",
-		timeSync.currentEpoch, timeSync.currentSlot, timeSync.validatorID, len(timeSync.externalSources))
+		timeSync.currentEpoch, timeSync.currentSlot, timeSync.ValidatorID, len(timeSync.externalSources))
 }
 
 // NewTimeSync creates a new TimeSync instance with Ethereum-inspired synchronization
-func NewTimeSync() *TimeSync {
+func NewTimeSync(networkManager NetworkManager) *TimeSync {
 	logger.L.Debug("NewTimeSync: Creating new time synchronization service")
 
 	// Initialize with the actual Ethereum Beacon Chain genesis time
 	beaconChainGenesis := time.Date(2020, 12, 1, 12, 0, 23, 0, time.UTC)
 
 	logger.L.WithField("genesisTime", beaconChainGenesis).Debug("NewTimeSync: Using genesis time")
+
+	// Use the network manager's ID as the validator ID
+	validatorID := generateValidatorID()
+	if networkManager != nil {
+		validatorID = networkManager.GetID()
+	}
 
 	timeSync := &TimeSync{
 		externalSources: make(map[string]bool),
@@ -70,11 +83,12 @@ func NewTimeSync() *TimeSync {
 		lastSyncTime:    time.Now(),
 		currentEpoch:    0,
 		currentSlot:     0,
-		validatorID:     generateValidatorID(),
+		ValidatorID:     validatorID,
 		validatorSlot:   make(map[uint64][]string),
+		networkManager:  networkManager,
 	}
 
-	logger.L.WithField("validatorID", timeSync.validatorID).Debug("NewTimeSync: Generated validator ID")
+	logger.L.WithField("ValidatorID", timeSync.ValidatorID).Debug("NewTimeSync: Generated validator ID")
 
 	for _, source := range NtpServerSource {
 		timeSync.AddSource(source)
@@ -146,7 +160,7 @@ func (timeSync *TimeSync) GetNetworkTime() time.Time {
 		"localTime":   time.Now(),
 		"offset":      timeSync.timeOffset,
 		"networkTime": networkTime,
-	}).Debug("GetNetworkTime: Calculated network time")
+	}).Trace("GetNetworkTime: Calculated network time")
 
 	return networkTime
 }
@@ -175,7 +189,7 @@ func (timeSync *TimeSync) IsTimeValid(timestamp time.Time) bool {
 // GetCurrentSlot returns the current slot number
 // This method is part of the ITimeSync interface
 func (timeSync *TimeSync) GetCurrentSlot() uint64 {
-	logger.L.Debug("GetCurrentSlot: Calculating current slot")
+	logger.L.Trace("GetCurrentSlot: Calculating current slot")
 
 	timeSync.mutex.RLock()
 	defer timeSync.mutex.RUnlock()
@@ -193,7 +207,7 @@ func (timeSync *TimeSync) GetCurrentSlot() uint64 {
 		"elapsed":        elapsed,
 		"slotDuration":   SlotDuration,
 		"calculatedSlot": slot,
-	}).Debug("GetCurrentSlot: Calculated current slot")
+	}).Trace("GetCurrentSlot: Calculated current slot")
 
 	return slot
 }
@@ -216,7 +230,7 @@ func (timeSync *TimeSync) GetCurrentEpoch() uint64 {
 
 // IsValidatorForCurrentSlot checks if this node is a validator for the current slot
 func (timeSync *TimeSync) IsValidatorForCurrentSlot() bool {
-	logger.L.WithField("validatorID", timeSync.validatorID).Debug("IsValidatorForCurrentSlot: Checking validator status")
+	logger.L.WithField("ValidatorID", timeSync.ValidatorID).Debug("IsValidatorForCurrentSlot: Checking validator status")
 
 	timeSync.mutex.RLock()
 	defer timeSync.mutex.RUnlock()
@@ -231,15 +245,32 @@ func (timeSync *TimeSync) IsValidatorForCurrentSlot() bool {
 
 	validators, exists := timeSync.validatorSlot[slotKey]
 	if !exists {
-		logger.L.WithField("slotKey", slotKey).Debug("IsValidatorForCurrentSlot: No validators assigned to this slot")
-		return false
+		logger.L.WithField("slotKey", slotKey).Debug("IsValidatorForCurrentSlot: No validators assigned to this slot, assigning now")
+		// Release read lock and acquire write lock to assign validators
+		timeSync.mutex.RUnlock()
+		timeSync.mutex.Lock()
+		
+		// Check again in case another goroutine assigned while we were waiting for the lock
+		validators, exists = timeSync.validatorSlot[slotKey]
+		if !exists {
+			timeSync.assignValidatorsForSlot(currentSlot)
+			validators = timeSync.validatorSlot[slotKey]
+		}
+		
+		timeSync.mutex.Unlock()
+		timeSync.mutex.RLock() // Re-acquire read lock for the rest of the function
+		
+		if len(validators) == 0 {
+			logger.L.WithField("slotKey", slotKey).Debug("IsValidatorForCurrentSlot: No validators available after assignment")
+			return false
+		}
 	}
 
 	// Check if our validator ID is in the list for this slot
 	for _, v := range validators {
-		if v == timeSync.validatorID {
+		if v == timeSync.ValidatorID {
 			logger.L.WithFields(logger.Fields{
-				"validatorID": timeSync.validatorID,
+				"ValidatorID": timeSync.ValidatorID,
 				"currentSlot": currentSlot,
 			}).Debug("IsValidatorForCurrentSlot: Node is a validator for current slot")
 			return true
@@ -247,7 +278,7 @@ func (timeSync *TimeSync) IsValidatorForCurrentSlot() bool {
 	}
 
 	logger.L.WithFields(logger.Fields{
-		"validatorID": timeSync.validatorID,
+		"ValidatorID": timeSync.ValidatorID,
 		"currentSlot": currentSlot,
 		"validators":  validators,
 	}).Debug("IsValidatorForCurrentSlot: Node is not a validator for current slot")
@@ -303,8 +334,36 @@ func (timeSync *TimeSync) runSlotTracker() {
 func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 	logger.L.WithField("slot", slot).Debug("assignValidatorsForSlot: Assigning validators to slot")
 
-	// This is a very simplified version of Ethereum's committee selection
-	// In reality, this would use a secure RANDAO mechanism
+	// Get all available network nodes as validator candidates
+	var candidateValidators []string
+	
+	if timeSync.networkManager != nil {
+		// Add this node as a candidate
+		candidateValidators = append(candidateValidators, timeSync.networkManager.GetID())
+		
+		// Add all discovered peers as candidates
+		peers := timeSync.networkManager.GetPeers()
+		for peerID := range peers {
+			candidateValidators = append(candidateValidators, peerID)
+		}
+		
+		logger.L.WithFields(logger.Fields{
+			"candidateCount": len(candidateValidators),
+			"candidates":     candidateValidators,
+		}).Debug("assignValidatorsForSlot: Collected candidate validators from network")
+	} else {
+		// Fallback to generating fake validators if no network manager
+		logger.L.Warn("assignValidatorsForSlot: No network manager available, using fallback validators")
+		for i := 0; i < 10; i++ {
+			candidateValidators = append(candidateValidators, fmt.Sprintf("validator-%d", i))
+		}
+	}
+
+	// If no candidates available, use fallback
+	if len(candidateValidators) == 0 {
+		logger.L.Warn("assignValidatorsForSlot: No candidate validators found, using fallback")
+		candidateValidators = []string{timeSync.ValidatorID}
+	}
 
 	// Use the slot number as a seed for pseudo-randomness
 	seed := new(big.Int).SetUint64(slot)
@@ -314,24 +373,22 @@ func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 
 	logger.L.WithField("seed", seed.String()).Debug("assignValidatorsForSlot: Generated seed for selection")
 
-	// Select 4 validators for this slot (simplified)
-	validators := make([]string, 0, 4)
+	// Select validators for this slot from the candidate pool
+	validators := make([]string, 0)
+	maxValidators := min(4, len(candidateValidators)) // Select up to 4 validators or all available
 
-	// Simplified validator selection based on the seed
-	// In a real implementation, this would use a more complex algorithm
-	validatorCount := 4
-	for i := 0; i < validatorCount; i++ {
+	for i := 0; i < maxValidators; i++ {
 		validatorIndex := new(big.Int).Add(seed, big.NewInt(int64(i)))
-		validatorIndex.Mod(validatorIndex, big.NewInt(100)) // Assume 100 possible validators
+		validatorIndex.Mod(validatorIndex, big.NewInt(int64(len(candidateValidators))))
 
-		validator := fmt.Sprintf("validator-%d", validatorIndex.Int64())
-		validators = append(validators, validator)
+		selectedValidator := candidateValidators[validatorIndex.Int64()]
+		validators = append(validators, selectedValidator)
 
 		logger.L.WithFields(logger.Fields{
-			"index":          i,
-			"validatorIndex": validatorIndex.Int64(),
-			"validator":      validator,
-		}).Debug("assignValidatorsForSlot: Selected validator")
+			"index":             i,
+			"validatorIndex":    validatorIndex.Int64(),
+			"selectedValidator": selectedValidator,
+		}).Debug("assignValidatorsForSlot: Selected validator from candidates")
 	}
 
 	// Store the validators for this slot
@@ -340,7 +397,7 @@ func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 
 	isNodeValidator := false
 	for _, v := range validators {
-		if v == timeSync.validatorID {
+		if v == timeSync.ValidatorID {
 			isNodeValidator = true
 			break
 		}
@@ -351,8 +408,17 @@ func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 		"slotKey":         slotKey,
 		"validators":      validators,
 		"validatorCount":  len(validators),
+		"candidateCount":  len(candidateValidators),
 		"isNodeValidator": isNodeValidator,
 	}).Debug("assignValidatorsForSlot: Assigned validators to slot")
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // syncWithSource synchronizes time with an external source

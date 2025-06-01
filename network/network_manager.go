@@ -54,8 +54,7 @@ type MDSNService interface {
 
 // Node represents a P2P node
 type Node struct {
-	ID string
-	// Address
+	ID              string // Address
 	Port            int
 	listener        net.Listener
 	Peers           map[string]string // map[id]address
@@ -439,6 +438,11 @@ func (node *Node) GetPeers() map[string]string {
 
 	logger.L.WithField("peerCount", len(result)).Debug("GetPeers: Returning peer list")
 	return result
+}
+
+// GetID returns the node's ID
+func (node *Node) GetID() string {
+	return node.ID
 }
 
 // BroadcastBlock sends a block to the outgoing channel for broadcasting

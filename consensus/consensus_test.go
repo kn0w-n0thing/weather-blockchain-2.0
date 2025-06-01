@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 	"weather-blockchain/block"
-	
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,22 +14,34 @@ import (
 // MockTimeSync mocks the TimeSync service for testing
 type MockTimeSync struct {
 	currentTime         time.Time
-	isValidator         bool
 	currentSlot         uint64
 	timeToNextSlot      time.Duration
 	slotStartTime       time.Time
 	timeValidationCheck bool
 }
 
+// MockValidatorSelection mocks the ValidatorSelection service for testing
+type MockValidatorSelection struct {
+	isValidator bool
+	validators  map[uint64]string
+}
+
 // NewMockTimeSync creates a new mock time sync for testing
 func NewMockTimeSync() *MockTimeSync {
 	return &MockTimeSync{
 		currentTime:         time.Now(),
-		isValidator:         false,
 		currentSlot:         1,
 		timeToNextSlot:      5 * time.Second,
 		slotStartTime:       time.Now().Add(-5 * time.Second),
 		timeValidationCheck: true,
+	}
+}
+
+// NewMockValidatorSelection creates a new mock validator selection for testing
+func NewMockValidatorSelection() *MockValidatorSelection {
+	return &MockValidatorSelection{
+		isValidator: false,
+		validators:  make(map[uint64]string),
 	}
 }
 
@@ -38,10 +50,6 @@ func (m *MockTimeSync) GetNetworkTime() time.Time {
 	return m.currentTime
 }
 
-// IsValidatorForCurrentSlot returns if this node is validator for current slot
-func (m *MockTimeSync) IsValidatorForCurrentSlot() bool {
-	return m.isValidator
-}
 
 // GetCurrentSlot returns mock current slot
 func (m *MockTimeSync) GetCurrentSlot() uint64 {
@@ -61,6 +69,19 @@ func (m *MockTimeSync) GetSlotStartTime(slot uint64) time.Time {
 // IsTimeValid returns whether a timestamp is valid
 func (m *MockTimeSync) IsTimeValid(timestamp time.Time) bool {
 	return m.timeValidationCheck
+}
+
+// IsLocalNodeValidatorForCurrentSlot returns if this node is validator for current slot
+func (m *MockValidatorSelection) IsLocalNodeValidatorForCurrentSlot() bool {
+	return m.isValidator
+}
+
+// GetValidatorForSlot returns the validator for a specific slot
+func (m *MockValidatorSelection) GetValidatorForSlot(slot uint64) string {
+	if validator, exists := m.validators[slot]; exists {
+		return validator
+	}
+	return "default-validator"
 }
 
 // TestConsensusEngine_Init tests the initialization of the consensus engine
@@ -84,11 +105,12 @@ func TestConsensusEngine_Init(t *testing.T) {
 	err := bc.AddBlock(genesisBlock)
 	require.NoError(t, err, "Should add genesis block without error")
 
-	// Create a mock time sync
+	// Create mock services
 	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, "test-validator", []byte("test-pubkey"), "test-privkey")
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Check initialization
 	assert.Equal(t, bc, ce.blockchain, "Blockchain should be properly initialized")
@@ -118,11 +140,12 @@ func TestConsensusEngine_ReceiveBlock(t *testing.T) {
 	err := bc.AddBlock(genesisBlock)
 	require.NoError(t, err, "Should add genesis block without error")
 
-	// Create a mock time sync
+	// Create mock services
 	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, "test-validator", []byte("test-pubkey"), "test-privkey")
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create a new valid block
 	newBlock := &block.Block{
@@ -171,12 +194,13 @@ func TestConsensusEngine_ReceiveInvalidBlock(t *testing.T) {
 	err := bc.AddBlock(genesisBlock)
 	require.NoError(t, err, "Should add genesis block without error")
 
-	// Create a mock time sync that will reject timestamps
+	// Create mock services that will reject timestamps
 	mockTimeSync := NewMockTimeSync()
 	mockTimeSync.timeValidationCheck = false
+	mockValidatorSelection := NewMockValidatorSelection()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, "test-validator", []byte("test-pubkey"), "test-privkey")
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create a new block with invalid timestamp
 	newBlock := &block.Block{
@@ -224,11 +248,12 @@ func TestConsensusEngine_ForkResolution(t *testing.T) {
 	err := bc.AddBlock(genesisBlock)
 	require.NoError(t, err, "Should add genesis block without error")
 
-	// Create a mock time sync
+	// Create mock services
 	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, "test-validator", []byte("test-pubkey"), "test-privkey")
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create block 1 in main chain
 	block1 := &block.Block{
@@ -241,7 +266,7 @@ func TestConsensusEngine_ForkResolution(t *testing.T) {
 		Signature:          []byte{},
 	}
 	block1.StoreHash()
-	
+
 	// Sign block1
 	signatureStr := fmt.Sprintf("signed-%s-by-%s", block1.Hash, "validator-1")
 	block1.Signature = []byte(signatureStr)
@@ -261,7 +286,7 @@ func TestConsensusEngine_ForkResolution(t *testing.T) {
 		Signature:          []byte{},
 	}
 	fork1.StoreHash()
-	
+
 	// Sign fork1
 	signatureStr = fmt.Sprintf("signed-%s-by-%s", fork1.Hash, "validator-2")
 	fork1.Signature = []byte(signatureStr)
@@ -282,7 +307,7 @@ func TestConsensusEngine_ForkResolution(t *testing.T) {
 		Signature:          []byte{},
 	}
 	block2.StoreHash()
-	
+
 	// Sign block2
 	signatureStr = fmt.Sprintf("signed-%s-by-%s", block2.Hash, "validator-1")
 	block2.Signature = []byte(signatureStr)
@@ -302,7 +327,7 @@ func TestConsensusEngine_ForkResolution(t *testing.T) {
 		Signature:          []byte{},
 	}
 	fork2.StoreHash()
-	
+
 	// Sign fork2
 	signatureStr = fmt.Sprintf("signed-%s-by-%s", fork2.Hash, "validator-2")
 	fork2.Signature = []byte(signatureStr)
@@ -317,7 +342,7 @@ func TestConsensusEngine_ForkResolution(t *testing.T) {
 		Signature:          []byte{},
 	}
 	fork3.StoreHash()
-	
+
 	// Sign fork3
 	signatureStr = fmt.Sprintf("signed-%s-by-%s", fork3.Hash, "validator-2")
 	fork3.Signature = []byte(signatureStr)
@@ -364,12 +389,13 @@ func TestConsensusEngine_CreateBlock(t *testing.T) {
 	err := bc.AddBlock(genesisBlock)
 	require.NoError(t, err, "Should add genesis block without error")
 
-	// Create a mock time sync where we are the validator
+	// Create mock services where we are the validator
 	mockTimeSync := NewMockTimeSync()
-	mockTimeSync.isValidator = true
+	mockValidatorSelection := NewMockValidatorSelection()
+	mockValidatorSelection.isValidator = true
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, "test-validator", []byte("test-pubkey"), "test-privkey")
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Call createNewBlock directly
 	ce.createNewBlock("Test Message")
@@ -391,7 +417,7 @@ func TestConsensusEngine_ProcessPendingBlocks(t *testing.T) {
 	// Create a new blockchain
 	bc := block.NewBlockchain("./test_data")
 
-	// Create genesis block
+	// Create genesis pendingBlock
 	genesisBlock := &block.Block{
 		Index:              0,
 		Timestamp:          time.Now().Unix(),
@@ -403,17 +429,18 @@ func TestConsensusEngine_ProcessPendingBlocks(t *testing.T) {
 	}
 	genesisBlock.StoreHash()
 
-	// Add genesis block
+	// Add genesis pendingBlock
 	err := bc.AddBlock(genesisBlock)
-	require.NoError(t, err, "Should add genesis block without error")
+	require.NoError(t, err, "Should add genesis pendingBlock without error")
 
-	// Create a mock time sync
+	// Create mock services
 	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, "test-validator", []byte("test-pubkey"), "test-privkey")
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
-	// Create block 2 that references a non-existent block 1
+	// Create pendingBlock 2 that references a non-existent pendingBlock 1
 	futureBlock := &block.Block{
 		Index:              2,
 		Timestamp:          time.Now().Unix(),
@@ -424,7 +451,7 @@ func TestConsensusEngine_ProcessPendingBlocks(t *testing.T) {
 		Signature:          []byte{},
 	}
 	futureBlock.StoreHash()
-	
+
 	// Sign futureBlock
 	signatureStr := fmt.Sprintf("signed-%s-by-%s", futureBlock.Hash, "validator-1")
 	futureBlock.Signature = []byte(signatureStr)
@@ -434,7 +461,7 @@ func TestConsensusEngine_ProcessPendingBlocks(t *testing.T) {
 	ce.pendingBlocks[futureBlock.Hash] = futureBlock
 	ce.mutex.Unlock()
 
-	// Now create the missing block 1
+	// Now create the missing pendingBlock 1
 	block1 := &block.Block{
 		Index:              1,
 		Timestamp:          time.Now().Unix(),
@@ -445,19 +472,19 @@ func TestConsensusEngine_ProcessPendingBlocks(t *testing.T) {
 		Signature:          []byte{},
 	}
 	block1.StoreHash()
-	
+
 	// Sign block1
 	signatureStr = fmt.Sprintf("signed-%s-by-%s", block1.Hash, "validator-1")
 	block1.Signature = []byte(signatureStr)
 
-	// Add block 1 to blockchain
+	// Add pendingBlock 1 to blockchain
 	err = bc.AddBlock(block1)
-	require.NoError(t, err, "Should add block 1 without error")
+	require.NoError(t, err, "Should add pendingBlock 1 without error")
 
-	// Update the future block to reference the now-existing block 1
+	// Update the future pendingBlock to reference the now-existing pendingBlock 1
 	futureBlock.PrevHash = block1.Hash
 	futureBlock.StoreHash()
-	
+
 	// Re-sign futureBlock after hash update
 	signatureStr = fmt.Sprintf("signed-%s-by-%s", futureBlock.Hash, "validator-1")
 	futureBlock.Signature = []byte(signatureStr)
@@ -465,32 +492,32 @@ func TestConsensusEngine_ProcessPendingBlocks(t *testing.T) {
 	// Process pending blocks directly instead of using the goroutine
 	ce.mutex.Lock()
 	processed := make([]string, 0)
-	
-	for hash, block := range ce.pendingBlocks {
-		err := ce.blockchain.IsBlockValid(block)
+
+	for hash, pendingBlock := range ce.pendingBlocks {
+		err := ce.blockchain.IsBlockValid(pendingBlock)
 		if err == nil {
-			// We can now add this block
-			err = ce.blockchain.AddBlockWithAutoSave(block)
+			// We can now add this pendingBlock
+			err = ce.blockchain.AddBlockWithAutoSave(pendingBlock)
 			if err == nil {
 				processed = append(processed, hash)
-				fmt.Printf("Processed pending block at height %d\n", block.Index)
+				fmt.Printf("Processed pending pendingBlock at height %d\n", pendingBlock.Index)
 			}
 		}
 	}
-	
+
 	// Remove processed blocks
 	for _, hash := range processed {
 		delete(ce.pendingBlocks, hash)
 	}
-	
+
 	ce.mutex.Unlock()
 
-	// Check if the future block was added
+	// Check if the future pendingBlock was added
 	block2 := bc.GetBlockByHash(futureBlock.Hash)
 
 	// In a real implementation, this would work correctly
 	// But in our test with simplified pending processing, we might need additional logic
 	if block2 != nil {
-		assert.Equal(t, futureBlock.Hash, block2.Hash, "Processed block should have correct hash")
+		assert.Equal(t, futureBlock.Hash, block2.Hash, "Processed pendingBlock should have correct hash")
 	}
 }

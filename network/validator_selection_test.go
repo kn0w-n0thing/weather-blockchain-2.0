@@ -35,7 +35,7 @@ func createTestTimeSync(currentSlot uint64) *MockTimeSync {
 		lastSyncTime:    genesisTime.Add(time.Duration(currentSlot) * SlotDuration),
 		currentEpoch:    currentSlot / SlotsPerEpoch,
 		currentSlot:     currentSlot,
-		validatorID:     fmt.Sprintf("validator-%d", 123), // Use a fixed ID for deterministic tests
+		ValidatorID:     fmt.Sprintf("validator-%d", 123), // Use a fixed ID for deterministic tests
 		validatorSlot:   make(map[uint64][]string),
 	}
 
@@ -405,4 +405,430 @@ func TestNewValidatorSelection(t *testing.T) {
 	assert.Equal(t, node, vs.node, "Node should be set correctly")
 	assert.Equal(t, uint64(32), vs.slotsPerEpoch, "SlotsPerEpoch should be 32")
 	assert.NotNil(t, vs.currentEpoch, "Current epoch should be initialized")
+	assert.False(t, vs.running, "ValidatorSelection should not be running initially")
+	assert.NotNil(t, vs.stopChan, "Stop channel should be initialized")
+}
+
+// Mock implementations for testing
+
+// MockBlock implements the Block interface for testing
+type MockBlock struct {
+	index              uint64
+	hash               string
+	data               string
+	validatorAddress   string
+	validatorPublicKey []byte
+	signature          []byte
+}
+
+func (mb *MockBlock) GetIndex() uint64                 { return mb.index }
+func (mb *MockBlock) GetHash() string                  { return mb.hash }
+func (mb *MockBlock) GetData() string                  { return mb.data }
+func (mb *MockBlock) StoreHash()                       { mb.hash = fmt.Sprintf("hash-%d", mb.index) }
+func (mb *MockBlock) SetSignature(sig []byte)          { mb.signature = sig }
+func (mb *MockBlock) SetValidatorAddress(addr string)  { mb.validatorAddress = addr }
+func (mb *MockBlock) SetValidatorPublicKey(key []byte) { mb.validatorPublicKey = key }
+
+// MockBlockchain implements the Blockchain interface for testing
+type MockBlockchain struct {
+	latestBlock Block
+	addError    error
+	addCalled   bool
+}
+
+func (mb *MockBlockchain) GetLatestBlock() Block { return mb.latestBlock }
+func (mb *MockBlockchain) AddBlockWithAutoSave(block Block) error {
+	mb.addCalled = true
+	return mb.addError
+}
+
+// MockBlockGenerator implements the BlockGenerator interface for testing
+type MockBlockGenerator struct {
+	generateBlock Block
+	signError     error
+	signCalled    bool
+}
+
+func (mbg *MockBlockGenerator) GenerateBlock(prevBlock Block, data string, validatorID string) Block {
+	newBlock := &MockBlock{
+		index:            prevBlock.GetIndex() + 1,
+		data:             data,
+		validatorAddress: validatorID,
+	}
+	newBlock.StoreHash()
+	return newBlock
+}
+
+func (mbg *MockBlockGenerator) SignBlock(block Block, validatorID string) error {
+	mbg.signCalled = true
+	if mbg.signError != nil {
+		return mbg.signError
+	}
+	block.SetSignature([]byte(fmt.Sprintf("signed-by-%s", validatorID)))
+	return nil
+}
+
+// Mock TimeSync with controllable slot progression
+type ControllableTimeSync struct {
+	currentSlot uint64
+}
+
+func (cts *ControllableTimeSync) GetCurrentSlot() uint64 {
+	return cts.currentSlot
+}
+
+func (cts *ControllableTimeSync) SetCurrentSlot(slot uint64) {
+	cts.currentSlot = slot
+}
+
+func TestSetBlockchain(t *testing.T) {
+	// Create test dependencies
+	timeSync := createTestTimeSync(50)
+	node := createTestNode("testNode", map[string]string{})
+	vs := NewValidatorSelection(timeSync, node)
+
+	// Create mock blockchain
+	mockBlockchain := &MockBlockchain{}
+
+	// Test setting blockchain
+	vs.SetBlockchain(mockBlockchain)
+	assert.Equal(t, mockBlockchain, vs.blockchain, "Blockchain should be set correctly")
+}
+
+func TestSetBlockGenerator(t *testing.T) {
+	// Create test dependencies
+	timeSync := createTestTimeSync(50)
+	node := createTestNode("testNode", map[string]string{})
+	vs := NewValidatorSelection(timeSync, node)
+
+	// Create mock block generator
+	mockGenerator := &MockBlockGenerator{}
+
+	// Test setting block generator
+	vs.SetBlockGenerator(mockGenerator)
+	assert.Equal(t, mockGenerator, vs.blockGenerator, "BlockGenerator should be set correctly")
+}
+
+func TestStartAndStop(t *testing.T) {
+	// Create test dependencies
+	timeSync := createTestTimeSync(50)
+	node := createTestNode("testNode", map[string]string{})
+	vs := NewValidatorSelection(timeSync, node)
+
+	// Verify initial state
+	assert.False(t, vs.running, "Should not be running initially")
+
+	// Start the service
+	vs.Start()
+	assert.True(t, vs.running, "Should be running after start")
+
+	// Give it a moment to start the goroutine
+	time.Sleep(10 * time.Millisecond)
+
+	// Stop the service
+	vs.Stop()
+	assert.False(t, vs.running, "Should not be running after stop")
+
+	// Give it a moment to stop the goroutine
+	time.Sleep(10 * time.Millisecond)
+
+	// Test stopping again (should be safe)
+	vs.Stop() // Should not panic or cause issues
+}
+
+func TestGenerateAndAddBlock(t *testing.T) {
+	// Create test dependencies
+	timeSync := createTestTimeSync(50)
+	node := createTestNode("testNode", map[string]string{})
+	vs := NewValidatorSelection(timeSync, node)
+
+	// Create mock dependencies
+	latestBlock := &MockBlock{index: 5, hash: "latest-hash", data: "latest-data"}
+	mockBlockchain := &MockBlockchain{latestBlock: latestBlock}
+	mockGenerator := &MockBlockGenerator{}
+
+	// Set dependencies
+	vs.SetBlockchain(mockBlockchain)
+	vs.SetBlockGenerator(mockGenerator)
+
+	// Test block generation
+	vs.generateAndAddBlock(100)
+
+	// Verify block generation was called
+	assert.True(t, mockGenerator.signCalled, "Block should be signed")
+	assert.True(t, mockBlockchain.addCalled, "Block should be added to blockchain")
+}
+
+func TestGenerateAndAddBlockWithNilLatestBlock(t *testing.T) {
+	// Create test dependencies
+	timeSync := createTestTimeSync(50)
+	node := createTestNode("testNode", map[string]string{})
+	vs := NewValidatorSelection(timeSync, node)
+
+	// Create mock dependencies with nil latest block
+	mockBlockchain := &MockBlockchain{latestBlock: nil}
+	mockGenerator := &MockBlockGenerator{}
+
+	// Set dependencies
+	vs.SetBlockchain(mockBlockchain)
+	vs.SetBlockGenerator(mockGenerator)
+
+	// Test block generation with nil latest block
+	vs.generateAndAddBlock(100)
+
+	// Verify no operations were performed
+	assert.False(t, mockGenerator.signCalled, "Block should not be signed when latest block is nil")
+	assert.False(t, mockBlockchain.addCalled, "Block should not be added when latest block is nil")
+}
+
+func TestGenerateAndAddBlockWithSignError(t *testing.T) {
+	// Create test dependencies
+	timeSync := createTestTimeSync(50)
+	node := createTestNode("testNode", map[string]string{})
+	vs := NewValidatorSelection(timeSync, node)
+
+	// Create mock dependencies with sign error
+	latestBlock := &MockBlock{index: 5, hash: "latest-hash", data: "latest-data"}
+	mockBlockchain := &MockBlockchain{latestBlock: latestBlock}
+	mockGenerator := &MockBlockGenerator{signError: fmt.Errorf("sign error")}
+
+	// Set dependencies
+	vs.SetBlockchain(mockBlockchain)
+	vs.SetBlockGenerator(mockGenerator)
+
+	// Test block generation with sign error
+	vs.generateAndAddBlock(100)
+
+	// Verify signing was attempted but blockchain add was not called
+	assert.True(t, mockGenerator.signCalled, "Block signing should be attempted")
+	assert.False(t, mockBlockchain.addCalled, "Block should not be added when signing fails")
+}
+
+func TestGenerateAndAddBlockWithAddError(t *testing.T) {
+	// Create test dependencies
+	timeSync := createTestTimeSync(50)
+	node := createTestNode("testNode", map[string]string{})
+	vs := NewValidatorSelection(timeSync, node)
+
+	// Create mock dependencies with add error
+	latestBlock := &MockBlock{index: 5, hash: "latest-hash", data: "latest-data"}
+	mockBlockchain := &MockBlockchain{latestBlock: latestBlock, addError: fmt.Errorf("add error")}
+	mockGenerator := &MockBlockGenerator{}
+
+	// Set dependencies
+	vs.SetBlockchain(mockBlockchain)
+	vs.SetBlockGenerator(mockGenerator)
+
+	// Test block generation with add error
+	vs.generateAndAddBlock(100)
+
+	// Verify both operations were attempted
+	assert.True(t, mockGenerator.signCalled, "Block should be signed")
+	assert.True(t, mockBlockchain.addCalled, "Block addition should be attempted")
+}
+
+func TestMonitorValidatorSelectionWithoutDependencies(t *testing.T) {
+	// Create controllable time sync
+	timeSync := &ControllableTimeSync{currentSlot: 50}
+
+	// Create test node that will be selected as validator
+	node := createTestNode("testNode", map[string]string{
+		"testNode": "127.0.0.1:8000",
+		"node2":    "127.0.0.2:8000",
+	})
+
+	vs := NewValidatorSelection(timeSync, node)
+
+	// Make sure testNode is in participants so it can be selected
+	vs.buildCurrentEpoch()
+	vs.currentEpoch.Participants = []string{"testNode", "node2"}
+
+	// Start monitoring without blockchain/generator dependencies
+	vs.Start()
+
+	// Change slot to trigger validator check
+	timeSync.SetCurrentSlot(51)
+
+	// Give it time to process
+	time.Sleep(150 * time.Millisecond)
+
+	// Stop the service
+	vs.Stop()
+
+	// Test passes if no panic occurs and service stops gracefully
+	assert.False(t, vs.running, "Service should be stopped")
+}
+
+func TestMonitorValidatorSelectionWithDependencies(t *testing.T) {
+	// Create controllable time sync
+	timeSync := &ControllableTimeSync{currentSlot: 0}
+
+	// Create test node 
+	node := createTestNode("testNode", map[string]string{})
+	vs := NewValidatorSelection(timeSync, node)
+
+	// Set up dependencies
+	latestBlock := &MockBlock{index: 5, hash: "latest-hash", data: "latest-data"}
+	mockBlockchain := &MockBlockchain{latestBlock: latestBlock}
+	mockGenerator := &MockBlockGenerator{}
+
+	vs.SetBlockchain(mockBlockchain)
+	vs.SetBlockGenerator(mockGenerator)
+
+	// Build epoch and force testNode to be the only participant
+	vs.buildCurrentEpoch()
+	vs.currentEpoch.Participants = []string{"testNode"}
+
+	// Start the monitoring service
+	vs.Start()
+	defer vs.Stop()
+
+	// Wait for the service to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Change to slot 1 (testNode should be validator)
+	timeSync.SetCurrentSlot(1)
+
+	// Wait for the monitoring loop to detect the change and process it
+	// Use a longer timeout to ensure processing completes
+	time.Sleep(500 * time.Millisecond)
+
+	// The monitoring loop should have detected the slot change and generated a block
+	assert.True(t, mockGenerator.signCalled, "Block should be signed when node is validator")
+	assert.True(t, mockBlockchain.addCalled, "Block should be added when node is validator")
+}
+
+func TestDirectBlockGeneration(t *testing.T) {
+	// Create test dependencies
+	timeSync := &ControllableTimeSync{currentSlot: 1}
+	node := createTestNode("testNode", map[string]string{})
+	vs := NewValidatorSelection(timeSync, node)
+
+	// Set up dependencies
+	latestBlock := &MockBlock{index: 5, hash: "latest-hash", data: "latest-data"}
+	mockBlockchain := &MockBlockchain{latestBlock: latestBlock}
+	mockGenerator := &MockBlockGenerator{}
+
+	vs.SetBlockchain(mockBlockchain)
+	vs.SetBlockGenerator(mockGenerator)
+
+	// Build epoch and make testNode the only participant
+	vs.buildCurrentEpoch()
+	vs.currentEpoch.Participants = []string{"testNode"}
+
+	// Debug: Check validator selection
+	t.Logf("Participants: %v", vs.currentEpoch.Participants)
+	t.Logf("Node ID: %s", vs.node.ID)
+	t.Logf("Is validator for slot 1: %v", vs.IsLocalNodeValidatorForSlot(1))
+	t.Logf("Validator for slot 1: %s", vs.GetValidatorForSlot(1))
+
+	// Directly test the slot transition processing
+	vs.ProcessSlotTransition(0, 1)
+
+	// Debug: Check if methods were called
+	t.Logf("Sign called: %v", mockGenerator.signCalled)
+	t.Logf("Add called: %v", mockBlockchain.addCalled)
+
+	// Verify block was generated and added
+	assert.True(t, mockGenerator.signCalled, "Block should be signed when processing slot transition")
+	assert.True(t, mockBlockchain.addCalled, "Block should be added when processing slot transition")
+}
+
+func TestDebugValidatorSelection(t *testing.T) {
+	// Let's debug step by step exactly what's happening
+	
+	// Step 1: Create basic setup
+	timeSync := &ControllableTimeSync{currentSlot: 0}
+	node := createTestNode("testNode", map[string]string{})
+	vs := NewValidatorSelection(timeSync, node)
+	
+	t.Logf("Step 1 - Created basic setup")
+	t.Logf("Node ID: %s", vs.node.ID)
+	t.Logf("Initial slot: %d", timeSync.GetCurrentSlot())
+	
+	// Step 2: Check epoch building
+	vs.buildCurrentEpoch()
+	t.Logf("Step 2 - Built epoch")
+	t.Logf("Epoch participants before override: %v", vs.currentEpoch.Participants)
+	
+	// Step 3: Override participants
+	vs.currentEpoch.Participants = []string{"testNode"}
+	t.Logf("Step 3 - Override participants")
+	t.Logf("Epoch participants after override: %v", vs.currentEpoch.Participants)
+	
+	// Step 4: Test validator selection for different slots
+	for slot := uint64(0); slot <= 5; slot++ {
+		validator := vs.GetValidatorForSlot(slot)
+		isValidator := vs.IsLocalNodeValidatorForSlot(slot)
+		t.Logf("Slot %d: validator=%s, isLocalValidator=%v", slot, validator, isValidator)
+	}
+	
+	// Step 5: Test direct slot transition
+	latestBlock := &MockBlock{index: 5, hash: "latest-hash", data: "latest-data"}
+	mockBlockchain := &MockBlockchain{latestBlock: latestBlock}
+	mockGenerator := &MockBlockGenerator{}
+	
+	vs.SetBlockchain(mockBlockchain)
+	vs.SetBlockGenerator(mockGenerator)
+	
+	t.Logf("Step 5 - Set dependencies")
+	t.Logf("Blockchain set: %v", vs.blockchain != nil)
+	t.Logf("Generator set: %v", vs.blockGenerator != nil)
+	
+	// Step 6: Test ProcessSlotTransition directly
+	t.Logf("Step 6 - Testing ProcessSlotTransition directly")
+	vs.ProcessSlotTransition(0, 1)
+	
+	t.Logf("After ProcessSlotTransition:")
+	t.Logf("Sign called: %v", mockGenerator.signCalled)
+	t.Logf("Add called: %v", mockBlockchain.addCalled)
+	
+	// This should work - if it doesn't, then the core logic is broken
+	if !mockGenerator.signCalled {
+		t.Errorf("CORE ISSUE: ProcessSlotTransition did not trigger signing")
+	}
+	if !mockBlockchain.addCalled {
+		t.Errorf("CORE ISSUE: ProcessSlotTransition did not trigger blockchain add")
+	}
+}
+
+func TestMonitoringLoopWithLogging(t *testing.T) {
+	// Create test setup
+	timeSync := &ControllableTimeSync{currentSlot: 0}
+	node := createTestNode("testNode", map[string]string{})
+	vs := NewValidatorSelection(timeSync, node)
+
+	// Set up dependencies
+	latestBlock := &MockBlock{index: 5, hash: "latest-hash", data: "latest-data"}
+	mockBlockchain := &MockBlockchain{latestBlock: latestBlock}
+	mockGenerator := &MockBlockGenerator{}
+
+	vs.SetBlockchain(mockBlockchain)
+	vs.SetBlockGenerator(mockGenerator)
+
+	// Build epoch and make testNode the only participant
+	vs.buildCurrentEpoch()
+	vs.currentEpoch.Participants = []string{"testNode"}
+
+	// Start monitoring
+	vs.Start()
+	defer vs.Stop()
+
+	// Wait for initial setup
+	time.Sleep(150 * time.Millisecond)
+
+	t.Logf("Changing from slot 0 to slot 1...")
+	// Change to slot 1
+	timeSync.SetCurrentSlot(1)
+
+	// Wait for the monitoring loop to detect and process the change
+	time.Sleep(250 * time.Millisecond)
+
+	t.Logf("Results after slot change:")
+	t.Logf("Sign called: %v", mockGenerator.signCalled)
+	t.Logf("Add called: %v", mockBlockchain.addCalled)
+
+	// This should work now with the logging
+	assert.True(t, mockGenerator.signCalled, "Block should be signed after slot change")
+	assert.True(t, mockBlockchain.addCalled, "Block should be added after slot change")
 }
