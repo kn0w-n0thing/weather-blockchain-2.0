@@ -52,6 +52,14 @@ type MDSNService interface {
 	Shutdown() error
 }
 
+// BlockProvider interface allows network to request blocks
+type BlockProvider interface {
+	GetBlockByIndex(index uint64) *block.Block
+	GetBlockByHash(hash string) *block.Block
+	GetLatestBlock() *block.Block
+	GetBlockCount() int
+}
+
 // Node represents a P2P node
 type Node struct {
 	ID              string // Address
@@ -68,6 +76,7 @@ type Node struct {
 	domain          string
 	outgoingBlocks  chan *block.Block // Channel for outgoing blocks
 	incomingBlocks  chan *block.Block // Channel for incoming blocks
+	blockProvider   BlockProvider     // Callback to get blocks when requested
 }
 
 // String returns a string representation of the Node
@@ -387,12 +396,27 @@ func (node *Node) discoverNodes() {
 				continue
 			}
 
-			// Determine IP address to use (prefer IPv4)
+			// Determine IP address to use (prefer localhost for local testing)
 			ip := entry.AddrV4
-			logger.L.WithField("ip", ip).Debug("discoverNodes: Using IPv4 address")
+			logger.L.WithField("discoveredIP", ip).Debug("discoverNodes: Discovered IP address")
+
+			// For local testing, prefer localhost over link-local addresses
+			var finalIP net.IP
+			if ip.IsLinkLocalUnicast() {
+				// If discovered via link-local, use localhost instead for reliability
+				finalIP = net.IPv4(127, 0, 0, 1)
+				logger.L.WithFields(logger.Fields{
+					"originalIP": ip.String(),
+					"finalIP":    finalIP.String(),
+					"reason":     "link-local replaced with localhost for local testing",
+				}).Debug("discoverNodes: Replacing link-local with localhost")
+			} else {
+				finalIP = ip
+				logger.L.WithField("finalIP", finalIP).Debug("discoverNodes: Using discovered IP")
+			}
 
 			// Format address
-			addr := net.JoinHostPort(ip.String(), strconv.Itoa(entry.Port))
+			addr := net.JoinHostPort(finalIP.String(), strconv.Itoa(entry.Port))
 			logger.L.WithField("formattedAddr", addr).Debug("discoverNodes: Formatted network address")
 
 			// Add to known nodes
@@ -443,6 +467,17 @@ func (node *Node) GetPeers() map[string]string {
 // GetID returns the node's ID
 func (node *Node) GetID() string {
 	return node.ID
+}
+
+// SetBlockProvider sets the block provider for handling block requests
+func (node *Node) SetBlockProvider(provider BlockProvider) {
+	node.blockProvider = provider
+	logger.L.Debug("SetBlockProvider: Block provider set for handling block requests")
+}
+
+// GetIncomingBlocks returns the channel for incoming blocks
+func (node *Node) GetIncomingBlocks() <-chan *block.Block {
+	return node.incomingBlocks
 }
 
 // BroadcastBlock sends a block to the outgoing channel for broadcasting
@@ -692,12 +727,112 @@ func (node *Node) handleConnection(conn net.Conn) {
 			}
 
 		case MessageTypeBlockRequest:
-			// This would be implemented if you want block request functionality
-			logger.L.WithField("messageType", "BlockRequest").Debug("handleConnection: Received block request (not implemented)")
+			logger.L.WithField("messageType", "BlockRequest").Debug("handleConnection: Processing block request")
+
+			// Parse the block request
+			var blockReq BlockRequestMessage
+			if err := json.Unmarshal(msg.Payload, &blockReq); err != nil {
+				logger.L.WithFields(logger.Fields{
+					"error":       err,
+					"payloadSize": len(msg.Payload),
+				}).Error("handleConnection: Error unmarshaling block request")
+				continue
+			}
+
+			logger.L.WithField("requestedIndex", blockReq.Index).Debug("handleConnection: Block request parsed")
+
+			// Handle block request if we have a block provider
+			if node.blockProvider != nil {
+				requestedBlock := node.blockProvider.GetBlockByIndex(blockReq.Index)
+
+				// Create response message
+				var responseMsg Message
+				if requestedBlock != nil {
+					logger.L.WithFields(logger.Fields{
+						"requestedIndex": blockReq.Index,
+						"blockHash":      requestedBlock.Hash,
+					}).Debug("handleConnection: Found requested block, sending response")
+
+					blockResponse := BlockResponseMessage{Block: requestedBlock}
+					responsePayload, err := json.Marshal(blockResponse)
+					if err != nil {
+						logger.L.WithError(err).Error("handleConnection: Failed to marshal block response")
+						continue
+					}
+
+					responseMsg = Message{
+						Type:    MessageTypeBlockResponse,
+						Payload: responsePayload,
+					}
+				} else {
+					logger.L.WithField("requestedIndex", blockReq.Index).Debug("handleConnection: Requested block not found, sending empty response")
+
+					blockResponse := BlockResponseMessage{Block: nil}
+					responsePayload, err := json.Marshal(blockResponse)
+					if err != nil {
+						logger.L.WithError(err).Error("handleConnection: Failed to marshal empty block response")
+						continue
+					}
+
+					responseMsg = Message{
+						Type:    MessageTypeBlockResponse,
+						Payload: responsePayload,
+					}
+				}
+
+				// Send response
+				responseData, err := json.Marshal(responseMsg)
+				if err != nil {
+					logger.L.WithError(err).Error("handleConnection: Failed to marshal response message")
+					continue
+				}
+
+				_, err = conn.Write(responseData)
+				if err != nil {
+					logger.L.WithError(err).Error("handleConnection: Failed to send block response")
+					continue
+				}
+
+				logger.L.WithField("requestedIndex", blockReq.Index).Info("handleConnection: Sent block response")
+			} else {
+				logger.L.Warn("handleConnection: No block provider available to handle block request")
+			}
 
 		case MessageTypeBlockResponse:
-			// This would be implemented if you want block response functionality
-			logger.L.WithField("messageType", "BlockResponse").Debug("handleConnection: Received block response (not implemented)")
+			logger.L.WithField("messageType", "BlockResponse").Debug("handleConnection: Processing block response")
+
+			// Parse the block response
+			var blockResp BlockResponseMessage
+			if err := json.Unmarshal(msg.Payload, &blockResp); err != nil {
+				logger.L.WithFields(logger.Fields{
+					"error":       err,
+					"payloadSize": len(msg.Payload),
+				}).Error("handleConnection: Error unmarshalling block response")
+				continue
+			}
+
+			if blockResp.Block != nil {
+				logger.L.WithFields(logger.Fields{
+					"blockIndex": blockResp.Block.Index,
+					"blockHash":  blockResp.Block.Hash,
+				}).Debug("handleConnection: Received block in response")
+
+				// Send to incoming blocks channel for processing
+				select {
+				case node.incomingBlocks <- blockResp.Block:
+					logger.L.WithFields(logger.Fields{
+						"blockIndex": blockResp.Block.Index,
+						"blockHash":  blockResp.Block.Hash,
+					}).Info("handleConnection: Block response queued for processing")
+				default:
+					logger.L.WithFields(logger.Fields{
+						"blockIndex": blockResp.Block.Index,
+						"blockHash":  blockResp.Block.Hash,
+					}).Warn("handleConnection: Incoming block channel full, dropped response block")
+				}
+			} else {
+				logger.L.Debug("handleConnection: Received empty block response (block not found)")
+			}
 
 		default:
 			logger.L.WithField("messageType", msg.Type).Warn("handleConnection: Received unknown message type")

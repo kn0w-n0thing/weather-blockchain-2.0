@@ -2,7 +2,10 @@ package main
 
 import (
 	"crypto/x509"
+	"encoding/json"
+	"fmt"
 	"github.com/urfave/cli/v2"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,6 +19,245 @@ import (
 )
 
 const PemKeyFileName = "key.pem"
+
+// syncWithNetwork attempts to synchronize the blockchain with network peers
+func syncWithNetwork(blockchain *block.Blockchain, consensusEngine *consensus.Engine, node *network.Node) error {
+	logger.L.Info("Starting blockchain synchronization with network peers")
+
+	maxRetries := 3
+	retryInterval := 15 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		logger.L.WithField("attempt", attempt).Info("Sync attempt")
+
+		initialBlockCount := len(blockchain.Blocks)
+		logger.L.WithField("initialBlocks", initialBlockCount).Debug("Current blockchain size before sync")
+
+		peers := node.GetPeers()
+		if len(peers) == 0 {
+			logger.L.WithField("attempt", attempt).Warn("No peers available for synchronization")
+			if attempt < maxRetries {
+				logger.L.WithField("retryIn", retryInterval).Info("Retrying sync after interval")
+				time.Sleep(retryInterval)
+				continue
+			}
+			return fmt.Errorf("no peers found after %d attempts", maxRetries)
+		}
+
+		logger.L.WithField("peerCount", len(peers)).Info("Found peers for synchronization")
+
+		// Try to request blockchain from all peers
+		successfulRequests := 0
+		for peerID, peerAddr := range peers {
+			logger.L.WithFields(logger.Fields{
+				"peerID":  peerID,
+				"address": peerAddr,
+				"attempt": attempt,
+			}).Info("Requesting blockchain from peer")
+
+			if err := requestBlockchainFromPeer(blockchain, peerAddr); err != nil {
+				logger.L.WithFields(logger.Fields{
+					"peerID": peerID,
+					"error":  err,
+				}).Warn("Failed to request from peer")
+				continue
+			}
+			successfulRequests++
+		}
+
+		if successfulRequests == 0 {
+			logger.L.WithField("attempt", attempt).Warn("No successful requests to any peer")
+			if attempt < maxRetries {
+				time.Sleep(retryInterval)
+				continue
+			}
+			return fmt.Errorf("failed to request from any peer after %d attempts", maxRetries)
+		}
+
+		// Wait a bit for blocks to be processed
+		logger.L.Info("Waiting for blocks to be processed...")
+		time.Sleep(5 * time.Second)
+
+		// Check if we actually received any blocks
+		finalBlockCount := len(blockchain.Blocks)
+		blocksReceived := finalBlockCount - initialBlockCount
+
+		logger.L.WithFields(logger.Fields{
+			"initialBlocks":  initialBlockCount,
+			"finalBlocks":    finalBlockCount,
+			"blocksReceived": blocksReceived,
+		}).Info("Sync attempt completed")
+
+		if blocksReceived > 0 {
+			logger.L.WithField("blocksReceived", blocksReceived).Info("Successfully synchronized blockchain with network")
+			return nil
+		}
+
+		logger.L.WithField("attempt", attempt).Warn("No blocks received from peers (they might be newly started too)")
+		if attempt < maxRetries {
+			logger.L.WithField("retryIn", retryInterval).Info("Retrying sync - peers might have blocks by then")
+			time.Sleep(retryInterval)
+		}
+	}
+
+	logger.L.Warn("Sync completed without receiving blocks - continuing with empty blockchain")
+	return fmt.Errorf("no blocks received after %d sync attempts", maxRetries)
+}
+
+// requestBlockchainFromPeer sends blockchain requests to a specific peer
+func requestBlockchainFromPeer(blockchain *block.Blockchain, peerAddr string) error {
+	logger.L.WithField("peerAddr", peerAddr).Debug("Requesting blockchain from peer")
+
+	// Determine starting block index based on local blockchain
+	var startIndex uint64
+	if len(blockchain.Blocks) == 0 {
+		startIndex = 0 // Start from genesis if we have no blocks
+		logger.L.Debug("Local blockchain is empty, requesting from genesis block")
+	} else {
+		startIndex = uint64(len(blockchain.Blocks)) // Start from next block after our latest
+		logger.L.WithFields(logger.Fields{
+			"localBlocks": len(blockchain.Blocks),
+			"startIndex":  startIndex,
+		}).Debug("Local blockchain has blocks, requesting from next index")
+	}
+
+	conn, err := net.Dial("tcp", peerAddr)
+	if err != nil {
+		return fmt.Errorf("failed to connect to peer %s: %v", peerAddr, err)
+	}
+	defer conn.Close()
+
+	// Request blocks sequentially until we get "not found" responses
+	blockIndex := startIndex
+	blocksReceived := 0
+	maxConsecutiveNotFound := 3 // Stop after 3 consecutive "not found" responses
+
+	logger.L.WithFields(logger.Fields{
+		"peerAddr":   peerAddr,
+		"startIndex": startIndex,
+	}).Info("Starting block sync - requesting until latest block")
+
+	for consecutiveNotFound := 0; consecutiveNotFound < maxConsecutiveNotFound; {
+		// Send request for current block
+		blockReq := network.BlockRequestMessage{
+			Index: blockIndex,
+		}
+
+		requestPayload, err := json.Marshal(blockReq)
+		if err != nil {
+			logger.L.WithError(err).Error("Failed to marshal block request")
+			break
+		}
+
+		requestMsg := network.Message{
+			Type:    network.MessageTypeBlockRequest,
+			Payload: requestPayload,
+		}
+
+		requestData, err := json.Marshal(requestMsg)
+		if err != nil {
+			logger.L.WithError(err).Error("Failed to marshal request message")
+			break
+		}
+
+		_, err = conn.Write(requestData)
+		if err != nil {
+			logger.L.WithFields(logger.Fields{
+				"blockIndex": blockIndex,
+				"error":      err,
+			}).Error("Failed to send block request")
+			break
+		}
+
+		logger.L.WithFields(logger.Fields{
+			"blockIndex": blockIndex,
+			"peerAddr":   peerAddr,
+		}).Debug("Sent block request to peer")
+
+		// Wait for response immediately
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+		decoder := json.NewDecoder(conn)
+		
+		var responseMsg network.Message
+		if err := decoder.Decode(&responseMsg); err != nil {
+			logger.L.WithFields(logger.Fields{
+				"blockIndex": blockIndex,
+				"error":      err,
+			}).Error("Failed to receive response for block request")
+			break
+		}
+
+		if responseMsg.Type != network.MessageTypeBlockResponse {
+			logger.L.WithField("messageType", responseMsg.Type).Warn("Received unexpected message type")
+			continue
+		}
+
+		// Parse the block response
+		var blockResp network.BlockResponseMessage
+		if err := json.Unmarshal(responseMsg.Payload, &blockResp); err != nil {
+			logger.L.WithError(err).Error("Failed to unmarshal block response")
+			break
+		}
+
+		if blockResp.Block != nil {
+			// Block found! Save it via consensus engine
+			logger.L.WithFields(logger.Fields{
+				"blockIndex": blockResp.Block.Index,
+				"blockHash":  blockResp.Block.Hash,
+			}).Info("Received block from peer, saving to blockchain")
+
+			err := blockchain.AddBlockWithAutoSave(blockResp.Block)
+			if err != nil {
+				logger.L.WithFields(logger.Fields{
+					"blockIndex": blockResp.Block.Index,
+					"blockHash":  blockResp.Block.Hash,
+					"error":      err,
+				}).Error("Failed to save historical block")
+			} else {
+				blocksReceived++
+				logger.L.WithFields(logger.Fields{
+					"blockIndex":     blockResp.Block.Index,
+					"blockHash":      blockResp.Block.Hash,
+					"blocksReceived": blocksReceived,
+				}).Info("Successfully saved historical block")
+			}
+
+			consecutiveNotFound = 0 // Reset counter since we found a block
+		} else {
+			// Block not found - peer doesn't have this block
+			consecutiveNotFound++
+			logger.L.WithFields(logger.Fields{
+				"blockIndex":           blockIndex,
+				"consecutiveNotFound":  consecutiveNotFound,
+				"maxConsecutiveNotFound": maxConsecutiveNotFound,
+			}).Debug("Block not found on peer")
+			
+			if consecutiveNotFound >= maxConsecutiveNotFound {
+				logger.L.WithFields(logger.Fields{
+					"blockIndex":           blockIndex,
+					"consecutiveNotFound":  consecutiveNotFound,
+				}).Info("Reached end of peer's blockchain (multiple blocks not found)")
+				break
+			}
+		}
+
+		blockIndex++ // Move to next block
+		time.Sleep(100 * time.Millisecond) // Small delay between requests
+	}
+
+	logger.L.WithFields(logger.Fields{
+		"peerAddr":       peerAddr,
+		"startIndex":     startIndex,
+		"endIndex":       blockIndex - 1,
+		"blocksReceived": blocksReceived,
+	}).Info("Completed blockchain sync with peer")
+
+	if blocksReceived > 0 {
+		return nil // Success
+	} else {
+		return fmt.Errorf("no blocks received from peer")
+	}
+}
 
 func main() {
 	app := &cli.App{
@@ -130,7 +372,9 @@ func main() {
 				}
 
 				if len(blockchain.Blocks) == 0 {
-					logger.L.Warn("No blocks found in blockchain. This node should sync with the network.")
+					logger.L.Info("No blocks found in blockchain. This node should sync with the network.")
+					// TODO: Implement more sophisticated sync strategy (incremental sync, parallel downloads, etc.)
+					// Note: Network sync will be attempted after node startup below
 				} else {
 					logger.L.WithFields(logger.Fields{
 						"blockCount": len(blockchain.Blocks),
@@ -170,6 +414,48 @@ func main() {
 			if err = consensusEngine.Start(); err != nil {
 				logger.L.WithError(err).Error("Failed to start consensus engine.")
 				return err
+			}
+
+			// Set up blockchain as block provider for network requests
+			node.SetBlockProvider(blockchain)
+			logger.L.Info("Blockchain set as block provider for network")
+
+			// Start bridge to process incoming blocks from network
+			go func() {
+				logger.L.Info("Starting network-to-consensus bridge")
+				for incomingBlock := range node.GetIncomingBlocks() {
+					logger.L.WithFields(logger.Fields{
+						"blockIndex": incomingBlock.Index,
+						"blockHash":  incomingBlock.Hash,
+					}).Debug("Bridge: Processing incoming block from network")
+
+					err := consensusEngine.ReceiveBlock(incomingBlock)
+					if err != nil {
+						logger.L.WithFields(logger.Fields{
+							"blockIndex": incomingBlock.Index,
+							"blockHash":  incomingBlock.Hash,
+							"error":      err,
+						}).Warn("Bridge: Failed to process incoming block")
+					} else {
+						logger.L.WithFields(logger.Fields{
+							"blockIndex": incomingBlock.Index,
+							"blockHash":  incomingBlock.Hash,
+						}).Info("Bridge: Successfully processed incoming block")
+					}
+				}
+				logger.L.Info("Network-to-consensus bridge stopped")
+			}()
+
+			// Sync with network if blockchain is empty
+			if len(blockchain.Blocks) == 0 {
+				logger.L.Info("Attempting to sync with network peers...")
+				go func() {
+					// Wait a bit for network discovery
+					time.Sleep(10 * time.Second)
+					if err := syncWithNetwork(blockchain, consensusEngine, node); err != nil {
+						logger.L.WithError(err).Warn("Network sync failed, continuing with empty blockchain")
+					}
+				}()
 			}
 
 			// Setup signal handling for graceful shutdown
