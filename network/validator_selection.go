@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"weather-blockchain/logger"
@@ -100,10 +101,14 @@ func (vs *ValidatorSelection) buildCurrentEpoch() {
 	// Always include the local node as a participant
 	participants = append(participants, vs.node.ID)
 	
-	// Add all discovered peers
-	for _, value := range vs.node.Peers {
-		participants = append(participants, value)
+	// Add all discovered peers (use peer IDs, not addresses)
+	for peerID := range vs.node.Peers {
+		participants = append(participants, peerID)
 	}
+
+	// Sort participants to ensure deterministic ordering across all nodes
+	// This is critical for consensus - all nodes must have the same participant order
+	sort.Strings(participants)
 
 	logger.L.WithField("participantCount", len(participants)).Debug("buildCurrentEpoch: Collected participants")
 

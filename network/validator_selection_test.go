@@ -123,10 +123,10 @@ func TestBuildCurrentEpoch(t *testing.T) {
 	assert.Contains(t, vs.currentEpoch.Participants, "testNode",
 		"Local node should be in the epoch participants")
 
-	// Each peer address value should be in the participants list
-	for _, address := range peerAddresses {
-		assert.Contains(t, vs.currentEpoch.Participants, address,
-			"Peer address %s should be in the epoch participants", address)
+	// Each peer ID (key) should be in the participants list  
+	for peerID := range peerAddresses {
+		assert.Contains(t, vs.currentEpoch.Participants, peerID,
+			"Peer ID %s should be in the epoch participants", peerID)
 	}
 
 	assert.NotEmpty(t, vs.currentEpoch.EpochHash, "Epoch hash should not be empty")
@@ -282,10 +282,10 @@ func TestUpdateEpochIfNeeded(t *testing.T) {
 	assert.Contains(t, vs.currentEpoch.Participants, "testNode",
 		"Local node should be in the new epoch participants")
 	
-	// Check that the peer addresses are used as participants
-	for _, address := range node.Peers {
-		assert.Contains(t, vs.currentEpoch.Participants, address,
-			"Peer address %s should be in the new epoch participants", address)
+	// Check that the peer IDs are used as participants
+	for peerID := range node.Peers {
+		assert.Contains(t, vs.currentEpoch.Participants, peerID,
+			"Peer ID %s should be in the new epoch participants", peerID)
 	}
 }
 

@@ -410,7 +410,7 @@ func main() {
 			if err != nil {
 				logger.L.WithError(err).Error("Failed to marshal public key.")
 			}
-			consensusEngine := consensus.NewConsensusEngine(blockchain, timeSync, validatorSelection, node.ID, publicKey, privateKey)
+			consensusEngine := consensus.NewConsensusEngine(blockchain, timeSync, validatorSelection, node, node.ID, publicKey, privateKey)
 			if err = consensusEngine.Start(); err != nil {
 				logger.L.WithError(err).Error("Failed to start consensus engine.")
 				return err

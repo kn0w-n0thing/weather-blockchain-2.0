@@ -7,6 +7,7 @@ import (
 	"time"
 	"weather-blockchain/block"
 	"weather-blockchain/logger"
+	"weather-blockchain/network"
 )
 
 // TimeSync defines the interface needed for time synchronization
@@ -29,6 +30,7 @@ type Engine struct {
 	blockchain          *block.Blockchain
 	timeSync            TimeSync
 	validatorSelection  ValidatorSelection
+	networkBroadcaster  network.Broadcaster
 	validatorID         string
 	validatorPublicKey  []byte
 	validatorPrivateKey []byte                    // In production, use proper key management
@@ -39,7 +41,7 @@ type Engine struct {
 
 // NewConsensusEngine creates a new consensus engine
 func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validatorSelection ValidatorSelection,
-	validatorID string, pubKey []byte, private []byte) *Engine {
+	networkBroadcaster network.Broadcaster, validatorID string, pubKey []byte, private []byte) *Engine {
 
 	logger.L.WithFields(logger.Fields{
 		"validatorID": validatorID,
@@ -50,6 +52,7 @@ func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validat
 		blockchain:          blockchain,
 		timeSync:            timeSync,
 		validatorSelection:  validatorSelection,
+		networkBroadcaster:  networkBroadcaster,
 		validatorID:         validatorID,
 		validatorPublicKey:  pubKey,
 		validatorPrivateKey: private,
@@ -144,7 +147,7 @@ func (ce *Engine) createNewBlock(message string) {
 		logger.L.Error("Please run the client with --genesis flag to create a genesis block first")
 		return
 	}
-	
+
 	logger.L.WithFields(logger.Fields{
 		"latestBlockIndex": latestBlock.Index,
 		"latestBlockHash":  latestBlock.Hash,
@@ -165,7 +168,7 @@ func (ce *Engine) createNewBlock(message string) {
 	// TODO: Consider adding more structured data format and metadata tracking
 	timestampStr := time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
 	dataWithTimestamp := fmt.Sprintf("%s - Modified at: %s", message, timestampStr)
-	
+
 	newBlock := &block.Block{
 		Index:              newBlockIndex,
 		Timestamp:          timestamp,
@@ -199,9 +202,12 @@ func (ce *Engine) createNewBlock(message string) {
 		return
 	}
 
-	// Broadcast block to network (implement this in your network package)
-	// network.BroadcastBlock(newBlock)
-	logger.L.Debug("Would broadcast block to network here (not implemented)")
+	// Broadcast block to network immediately after generation
+	ce.networkBroadcaster.BroadcastBlock(newBlock)
+	logger.L.WithFields(logger.Fields{
+		"blockIndex": newBlock.Index,
+		"blockHash":  newBlock.Hash,
+	}).Info("Block broadcasted to network")
 
 	logger.L.WithFields(logger.Fields{
 		"blockIndex": newBlock.Index,
@@ -330,6 +336,12 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 	}).Debug("Block doesn't fit directly into chain, checking if it's a fork")
 
 	latestBlock := ce.blockchain.GetLatestBlock()
+
+	// Check if we have a genesis block before proceeding
+	if latestBlock == nil {
+		logger.L.Error("Cannot process fork: no genesis block found in blockchain")
+		return fmt.Errorf("no genesis block found, cannot process incoming block")
+	}
 
 	// If this block builds on our latest, but has a different hash, it's a competing block
 	if block.PrevHash == latestBlock.Hash && block.Hash != latestBlock.Hash {

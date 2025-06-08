@@ -60,6 +60,11 @@ type BlockProvider interface {
 	GetBlockCount() int
 }
 
+// Broadcaster NetworkBroadcaster interface for broadcasting blocks to the network
+type Broadcaster interface {
+	BroadcastBlock(block *block.Block)
+}
+
 // Node represents a P2P node
 type Node struct {
 	ID              string // Address
@@ -526,7 +531,7 @@ func (node *Node) handleOutgoingBlocks() {
 			logger.L.WithFields(logger.Fields{
 				"blockIndex": blk.Index,
 				"blockHash":  blk.Hash,
-			}).Debug("handleOutgoingBlocks: Received block for broadcasting")
+			}).Debug("handleOutgoingBlocks: Block for broadcasting")
 
 			// Broadcast the block to all peers
 			node.broadcastToAllPeers(blk)
@@ -543,7 +548,10 @@ func (node *Node) broadcastToAllPeers(blk *block.Block) {
 	}).Debug("broadcastToAllPeers: Broadcasting block to all peers")
 
 	// Marshal the block
-	blockData, err := json.Marshal(blk)
+	blockMsg := BlockMessage{
+		Block: blk,
+	}
+	blockData, err := json.Marshal(blockMsg)
 	if err != nil {
 		logger.L.WithFields(logger.Fields{
 			"error":      err,
@@ -695,15 +703,18 @@ func (node *Node) handleConnection(conn net.Conn) {
 		case MessageTypeBlock:
 			logger.L.WithField("messageType", "Block").Debug("handleConnection: Processing block message")
 
+			fmt.Printf("Raw message: %s\n", msg.Payload)
 			// Parse the block
 			var blockMsg BlockMessage
 			if err := json.Unmarshal(msg.Payload, &blockMsg); err != nil {
 				logger.L.WithFields(logger.Fields{
 					"error":       err,
 					"payloadSize": len(msg.Payload),
-				}).Error("handleConnection: Error unmarshaling block message")
+				}).Error("handleConnection: Error unmarshalling block message")
 				continue
 			}
+
+			logger.L.WithFields(logger.Fields{"blockMsg": blockMsg}).Debug("handleConnection: block message")
 
 			blockIndex := blockMsg.Block.Index
 			blockHash := blockMsg.Block.Hash
