@@ -109,6 +109,7 @@ func NewNode(id string, port int) *Node {
 
 	logger.L.WithFields(logger.Fields{
 		"node":        node.String(),
+		"port":        node.Port,
 		"serviceType": node.serviceName,
 		"domain":      node.domain,
 		"channelSize": channelBufferSize,
@@ -186,13 +187,24 @@ func (node *Node) Start() error {
 	info := []string{fmt.Sprintf("id=%s", node.ID)}
 	logger.L.WithField("txtInfo", info).Debug("Start: Preparing mDNS service")
 
+	// Get the local IP address for better mDNS advertisement
+	localIP := node.getLocalNetworkIP()
+	var ips []net.IP
+	if localIP != nil {
+		ips = []net.IP{localIP}
+		logger.L.WithField("advertisedIP", localIP).Debug("Start: Using specific IP for mDNS advertisement")
+	} else {
+		ips = nil // Fallback to all interfaces
+		logger.L.Debug("Start: Using all interfaces for mDNS advertisement")
+	}
+
 	service, err := mdns.NewMDNSService(
 		node.ID,          // Instance name
 		node.serviceName, // Service name
 		node.domain,      // Domain
 		"",               // Host name (empty = default)
 		node.Port,        // Port
-		nil,              // IPs (nil = all)
+		ips,              // IPs (specific or all)
 		info,             // TXT record info
 	)
 	if err != nil {
@@ -327,8 +339,8 @@ func (node *Node) discoverNodes() {
 	entriesCh := make(chan *mdns.ServiceEntry, channelSize)
 	logger.L.WithField("channelSize", channelSize).Debug("discoverNodes: Created results channel")
 
-	// Start the lookup
-	timeout := 50 * time.Millisecond
+	// Start the lookup - use longer timeout for reliable network discovery
+	timeout := 1000 * time.Millisecond // Increased from 50ms to 1000ms for cross-network discovery
 	params := &mdns.QueryParam{
 		Service:     node.serviceName,
 		Domain:      node.domain,
@@ -401,23 +413,47 @@ func (node *Node) discoverNodes() {
 				continue
 			}
 
-			// Determine IP address to use (prefer localhost for local testing)
+			// Determine IP address to use with smart network detection
 			ip := entry.AddrV4
 			logger.L.WithField("discoveredIP", ip).Debug("discoverNodes: Discovered IP address")
 
-			// For local testing, prefer localhost over link-local addresses
 			var finalIP net.IP
 			if ip.IsLinkLocalUnicast() {
-				// If discovered via link-local, use localhost instead for reliability
-				finalIP = net.IPv4(127, 0, 0, 1)
-				logger.L.WithFields(logger.Fields{
-					"originalIP": ip.String(),
-					"finalIP":    finalIP.String(),
-					"reason":     "link-local replaced with localhost for local testing",
-				}).Debug("discoverNodes: Replacing link-local with localhost")
+				// Link-local address (169.254.x.x) - decide based on context
+				if node.isLocalTestingMode() {
+					// In local testing mode, replace with localhost for reliability
+					finalIP = net.IPv4(127, 0, 0, 1)
+					logger.L.WithFields(logger.Fields{
+						"originalIP": ip.String(),
+						"finalIP":    finalIP.String(),
+						"reason":     "link-local replaced with localhost for local testing",
+					}).Debug("discoverNodes: Local testing mode - using localhost")
+				} else {
+					// In network mode, keep link-local address for cross-network communication
+					finalIP = ip
+					logger.L.WithFields(logger.Fields{
+						"originalIP": ip.String(),
+						"finalIP":    finalIP.String(),
+						"reason":     "keeping link-local address for network communication",
+					}).Debug("discoverNodes: Network mode - keeping link-local address")
+				}
+			} else if ip.IsLoopback() {
+				// Loopback address (127.x.x.x) - only use in local testing
+				if node.isLocalTestingMode() {
+					finalIP = ip
+					logger.L.WithField("finalIP", finalIP).Debug("discoverNodes: Using loopback address in local testing")
+				} else {
+					// Skip loopback in network mode as it won't reach other machines
+					logger.L.WithFields(logger.Fields{
+						"skippedIP": ip.String(),
+						"reason":    "loopback address skipped in network mode",
+					}).Debug("discoverNodes: Skipping loopback address in network mode")
+					continue
+				}
 			} else {
+				// Regular IP address (private or public) - always use
 				finalIP = ip
-				logger.L.WithField("finalIP", finalIP).Debug("discoverNodes: Using discovered IP")
+				logger.L.WithField("finalIP", finalIP).Debug("discoverNodes: Using regular IP address")
 			}
 
 			// Format address
