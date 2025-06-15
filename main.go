@@ -401,6 +401,28 @@ func main() {
 			// Create and start ValidatorSelection service
 			validatorSelection := network.NewValidatorSelection(timeSync, node)
 			validatorSelection.Start()
+			
+			// Debug validator selection
+			time.Sleep(2 * time.Second) // Wait for discovery
+			fmt.Println("=== Validator Selection Debug ===")
+			fmt.Printf("Local node ID: %s\n", node.ID)
+			fmt.Printf("Peers discovered: %d\n", len(node.Peers))
+			fmt.Printf("Current slot validator check: %v\n", validatorSelection.IsLocalNodeValidatorForCurrentSlot())
+			
+			// Test next 10 slots
+			fmt.Println("\n=== Next 10 slots validator selection ===")
+			currentSlot := uint64(time.Now().Unix()) / 12
+			localCount := 0
+			for i := 0; i < 10; i++ {
+				slot := currentSlot + uint64(i)
+				selectedValidator := validatorSelection.GetValidatorForSlot(slot)
+				isLocal := validatorSelection.IsLocalNodeValidatorForSlot(slot)
+				if isLocal {
+					localCount++
+				}
+				fmt.Printf("Slot %d: %s (local: %v)\n", slot, selectedValidator, isLocal)
+			}
+			fmt.Printf("Local node selected in %d/10 slots (%.1f%%)\n", localCount, float64(localCount)*10.0)
 
 			privateKey, err := x509.MarshalECPrivateKey(acc.PrivateKey)
 			if err != nil {

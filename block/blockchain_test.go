@@ -141,62 +141,24 @@ func TestAddInvalidBlock(t *testing.T) {
 	err = bc.AddBlock(genesisBlock)
 	require.NoError(t, err, "Should add genesis block without error")
 
-	// Test cases for invalid blocks
-	testCases := []struct {
-		name        string
-		block       *Block
-		errorString string
-	}{
-		{
-			name: "Invalid index",
-			block: &Block{
-				Index:            0, // Should be 1
-				Timestamp:        time.Now().Unix(),
-				PrevHash:         genesisBlock.Hash,
-				ValidatorAddress: acc.Address,
-				Data:             "Invalid Index Block",
-			},
-			errorString: "invalid block index",
-		},
-		{
-			name: "Invalid previous hash",
-			block: &Block{
-				Index:            1,
-				Timestamp:        time.Now().Unix(),
-				PrevHash:         "wrong_previous_hash",
-				ValidatorAddress: acc.Address,
-				Data:             "Invalid PrevHash Block",
-			},
-			errorString: "invalid previous hash",
-		},
-		{
-			name: "Skipped index",
-			block: &Block{
-				Index:            2, // Should be 1
-				Timestamp:        time.Now().Unix(),
-				PrevHash:         genesisBlock.Hash,
-				ValidatorAddress: acc.Address,
-				Data:             "Skipped Index Block",
-			},
-			errorString: "invalid block index",
-		},
+	// Test case for invalid block hash
+	invalidBlock := &Block{
+		Index:            1,
+		Timestamp:        time.Now().Unix(),
+		PrevHash:         genesisBlock.Hash,
+		ValidatorAddress: acc.Address,
+		Data:             "Invalid Block",
+		Hash:             "invalid_hash", // Invalid hash
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Store hash in the block
-			tc.block.StoreHash()
+	// Try to add invalid block (should fail due to hash mismatch)
+	err = bc.AddBlock(invalidBlock)
+	assert.Error(t, err, "Should not add block with invalid hash")
+	assert.Equal(t, "invalid block hash", err.Error(), "Error message should be correct")
 
-			// Try to add invalid block
-			err = bc.AddBlock(tc.block)
-			assert.Error(t, err, "Should not add invalid block")
-			assert.Equal(t, tc.errorString, err.Error(), "Error message should be correct")
-
-			// Verify blockchain state is unchanged
-			assert.Len(t, bc.Blocks, 1, "Blockchain should still have only the genesis block")
-			assert.Equal(t, genesisBlock.Hash, bc.LatestHash, "Latest hash should still match genesis block hash")
-		})
-	}
+	// Verify blockchain state is unchanged
+	assert.Len(t, bc.Blocks, 1, "Blockchain should still have only the genesis block")
+	assert.Equal(t, genesisBlock.Hash, bc.LatestHash, "Latest hash should still match genesis block hash")
 }
 
 func TestGetBlockByHash(t *testing.T) {
@@ -316,21 +278,21 @@ func TestIsBlockValid(t *testing.T) {
 	require.NoError(t, err, "Should create second block without error")
 
 	err = bc.IsBlockValid(block2)
-	assert.NoError(t, err, "Second block should be valid")
+	assert.NoError(t, err, "Second block should be valid (basic validation only)")
 
-	// Test invalid blocks
+	// Test invalid block with wrong hash
 	invalidBlock := &Block{
-		Index:            0, // Should be 1
+		Index:            1,
 		Timestamp:        time.Now().Unix(),
 		PrevHash:         genesisBlock.Hash,
 		ValidatorAddress: acc.Address,
 		Data:             "Invalid Block",
+		Hash:             "wrong_hash", // Invalid hash
 	}
-	invalidBlock.StoreHash()
 
 	err = bc.IsBlockValid(invalidBlock)
-	assert.Error(t, err, "Invalid block should not be valid")
-	assert.Equal(t, "invalid block index", err.Error(), "Error message should be correct")
+	assert.Error(t, err, "Block with invalid hash should not be valid")
+	assert.Equal(t, "invalid block hash", err.Error(), "Error message should be correct")
 }
 
 func TestVerifyChain(t *testing.T) {
@@ -648,15 +610,15 @@ func TestInvalidBlockWithAutoSave(t *testing.T) {
 	err = bc.AddBlockWithAutoSave(genesisBlock)
 	assert.NoError(t, err, "Should add genesis block with auto-save without error")
 
-	// Try to add an invalid block with auto-save
+	// Try to add an invalid block with auto-save (invalid hash)
 	invalidBlock := &Block{
-		Index:            0, // Should be 1
+		Index:            1,
 		Timestamp:        time.Now().Unix(),
 		PrevHash:         genesisBlock.Hash,
 		ValidatorAddress: acc.Address,
 		Data:             "Invalid Block",
+		Hash:             "invalid_hash", // Wrong hash
 	}
-	invalidBlock.StoreHash()
 
 	// This should fail and not save
 	err = bc.AddBlockWithAutoSave(invalidBlock)
@@ -840,4 +802,166 @@ func TestLoadInvalidBlockchainFromFile(t *testing.T) {
 	_, err = LoadBlockchainFromFile(customFilePath)
 	assert.Error(t, err, "Should return error when loading invalid blockchain")
 	assert.Contains(t, err.Error(), "invalid genesis block", "Error should mention invalid genesis block")
+}
+
+// TestValidateBlockForChain tests the validateBlockForChain function
+func TestValidateBlockForChain(t *testing.T) {
+	bc := NewBlockchain()
+
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+
+	// Create and add genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	genesisBlock.StoreHash() // Ensure hash is stored before adding
+	err = bc.AddBlock(genesisBlock)
+	require.NoError(t, err, "Should add genesis block without error")
+
+	// Create valid second block
+	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2 Data")
+	require.NoError(t, err, "Should create second block without error")
+
+	// Test valid chain placement
+	err = bc.validateBlockForChain(block2, bc.Blocks[0])
+	assert.NoError(t, err, "Valid block should pass chain validation")
+
+	// Test invalid index
+	invalidIndexBlock := &Block{
+		Index:            2, // Should be 1
+		Timestamp:        time.Now().Unix(),
+		PrevHash:         genesisBlock.Hash,
+		ValidatorAddress: acc.Address,
+		Data:             "Invalid Index Block",
+	}
+	invalidIndexBlock.StoreHash()
+
+	err = bc.validateBlockForChain(invalidIndexBlock, bc.Blocks[0])
+	assert.Error(t, err, "Block with invalid index should fail chain validation")
+	assert.Equal(t, "invalid block index", err.Error(), "Error message should be correct")
+
+	// Test invalid previous hash
+	invalidPrevHashBlock := &Block{
+		Index:            1,
+		Timestamp:        time.Now().Unix(),
+		PrevHash:         "wrong_hash",
+		ValidatorAddress: acc.Address,
+		Data:             "Invalid PrevHash Block",
+	}
+	invalidPrevHashBlock.StoreHash()
+
+	err = bc.validateBlockForChain(invalidPrevHashBlock, bc.Blocks[0])
+	assert.Error(t, err, "Block with invalid previous hash should fail chain validation")
+	assert.Equal(t, "invalid previous hash", err.Error(), "Error message should be correct")
+}
+
+// TestCanAddDirectly tests the CanAddDirectly function
+func TestCanAddDirectly(t *testing.T) {
+	bc := NewBlockchain()
+
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+
+	// Test genesis block on empty chain
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	genesisBlock.StoreHash() // Ensure hash is stored for validation
+
+	err = bc.CanAddDirectly(genesisBlock)
+	assert.NoError(t, err, "Genesis block should be addable directly to empty chain")
+
+	// Add genesis block
+	err = bc.AddBlock(genesisBlock)
+	require.NoError(t, err, "Should add genesis block without error")
+
+	// Test valid second block
+	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2 Data")
+	require.NoError(t, err, "Should create second block without error")
+
+	err = bc.CanAddDirectly(block2)
+	assert.NoError(t, err, "Valid second block should be addable directly")
+
+	// Test block with wrong previous hash (fork scenario)
+	forkBlock, err := createSignedBlock(1, "different_hash", acc, "Fork Block")
+	require.NoError(t, err, "Should create fork block without error")
+
+	err = bc.CanAddDirectly(forkBlock)
+	assert.Error(t, err, "Fork block should not be addable directly")
+	assert.Equal(t, "invalid previous hash", err.Error(), "Error message should be correct")
+
+	// Test block with invalid hash
+	invalidHashBlock := &Block{
+		Index:            1,
+		Timestamp:        time.Now().Unix(),
+		PrevHash:         genesisBlock.Hash,
+		ValidatorAddress: acc.Address,
+		Data:             "Invalid Hash Block",
+		Hash:             "wrong_hash",
+	}
+
+	err = bc.CanAddDirectly(invalidHashBlock)
+	assert.Error(t, err, "Block with invalid hash should not be addable directly")
+	assert.Equal(t, "invalid block hash", err.Error(), "Error message should be correct")
+}
+
+// TestTryAddBlockWithForkResolution tests the TryAddBlockWithForkResolution function
+func TestTryAddBlockWithForkResolution(t *testing.T) {
+	bc := NewBlockchain()
+
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+
+	// Add genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	genesisBlock.StoreHash() // Ensure hash is stored before adding
+	err = bc.AddBlock(genesisBlock)
+	require.NoError(t, err, "Should add genesis block without error")
+
+	// Test direct addition (normal case)
+	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2 Data")
+	require.NoError(t, err, "Should create second block without error")
+
+	err = bc.TryAddBlockWithForkResolution(block2)
+	assert.NoError(t, err, "Valid block should be added directly")
+	assert.Len(t, bc.Blocks, 2, "Blockchain should have 2 blocks")
+
+	// Test fork resolution - creating another blockchain state for fork scenario
+	bc2 := NewBlockchain()
+	err = bc2.AddBlock(genesisBlock)
+	require.NoError(t, err, "Should add genesis block to second blockchain")
+
+	// Create competing block at same height
+	competingBlock, err := createSignedBlock(1, genesisBlock.Hash, acc, "Competing Block")
+	require.NoError(t, err, "Should create competing block without error")
+
+	// This should work because it's a valid block extending from genesis
+	err = bc2.TryAddBlockWithForkResolution(competingBlock)
+	assert.NoError(t, err, "Competing block should be addable")
+	assert.Len(t, bc2.Blocks, 2, "Second blockchain should have 2 blocks")
+
+	// Test block with unknown previous hash
+	unknownPrevBlock, err := createSignedBlock(2, "unknown_hash", acc, "Unknown Prev Block")
+	require.NoError(t, err, "Should create block with unknown previous hash")
+
+	err = bc.TryAddBlockWithForkResolution(unknownPrevBlock)
+	assert.Error(t, err, "Block with unknown previous hash should fail")
+	assert.Equal(t, "previous block not found", err.Error(), "Error message should be correct")
+
+	// Test invalid block (bad hash)
+	invalidBlock := &Block{
+		Index:            2,
+		Timestamp:        time.Now().Unix(),
+		PrevHash:         block2.Hash,
+		ValidatorAddress: acc.Address,
+		Data:             "Invalid Block",
+		Hash:             "invalid_hash",
+	}
+
+	err = bc.TryAddBlockWithForkResolution(invalidBlock)
+	assert.Error(t, err, "Block with invalid hash should fail")
+	assert.Equal(t, "invalid block hash", err.Error(), "Error message should be correct")
 }

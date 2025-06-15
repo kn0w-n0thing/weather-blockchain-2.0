@@ -91,7 +91,7 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 		return nil
 	}
 
-	// For non-genesis blocks, validate the block before adding
+	// For non-genesis blocks, just do basic validation
 	logger.L.WithField("blockIndex", block.Index).Debug("Validating non-genesis block")
 	err := blockchain.validateBlock(block)
 	if err != nil {
@@ -124,34 +124,7 @@ func (blockchain *Blockchain) validateBlock(block *Block) error {
 		"blockHash":  block.Hash,
 	}).Debug("Validating block")
 
-	// Get the latest block
-	latestBlock := blockchain.Blocks[len(blockchain.Blocks)-1]
-
-	logger.L.WithFields(logger.Fields{
-		"latestBlockIndex": latestBlock.Index,
-		"latestBlockHash":  latestBlock.Hash,
-		"newBlockIndex":    block.Index,
-	}).Debug("Comparing with latest block")
-
-	// Check if the index is correct
-	if block.Index != latestBlock.Index+1 {
-		logger.L.WithFields(logger.Fields{
-			"blockIndex":       block.Index,
-			"latestBlockIndex": latestBlock.Index,
-			"expectedIndex":    latestBlock.Index + 1,
-		}).Warn("Invalid block index")
-		return errors.New("invalid block index")
-	}
-
-	// Check if the previous hash matches the latest block's hash
-	if block.PrevHash != latestBlock.Hash {
-		logger.L.WithFields(logger.Fields{
-			"blockPrevHash":   block.PrevHash,
-			"latestBlockHash": latestBlock.Hash,
-		}).Warn("Invalid previous hash")
-		return errors.New("invalid previous hash")
-	}
-
+	// Basic block validation (hash integrity)
 	// Verify the block's hash
 	calculatedHash := block.CalculateHash()
 	calculatedHashHex := hex.EncodeToString(calculatedHash)
@@ -164,11 +137,133 @@ func (blockchain *Blockchain) validateBlock(block *Block) error {
 		return errors.New("invalid block hash")
 	}
 
-	// Additional validation rules can be added here
-	// For example, verifying the signature
-
 	logger.L.WithField("blockIndex", block.Index).Debug("Block validation successful")
 	return nil
+}
+
+// validateBlockForChain validates a block for placement in the chain
+func (blockchain *Blockchain) validateBlockForChain(block *Block, previousBlock *Block) error {
+	logger.L.WithFields(logger.Fields{
+		"blockIndex": block.Index,
+		"blockHash":  block.Hash,
+		"prevIndex":  previousBlock.Index,
+	}).Debug("Validating block for chain placement")
+
+	// Check if the index is correct
+	if block.Index != previousBlock.Index+1 {
+		logger.L.WithFields(logger.Fields{
+			"blockIndex":     block.Index,
+			"prevBlockIndex": previousBlock.Index,
+			"expectedIndex":  previousBlock.Index + 1,
+		}).Warn("Invalid block index for chain placement")
+		return errors.New("invalid block index")
+	}
+
+	// Check if the previous hash matches
+	if block.PrevHash != previousBlock.Hash {
+		logger.L.WithFields(logger.Fields{
+			"blockPrevHash": block.PrevHash,
+			"prevBlockHash": previousBlock.Hash,
+		}).Warn("Invalid previous hash")
+		return errors.New("invalid previous hash")
+	}
+
+	return nil
+}
+
+// CanAddDirectly checks if a block can be added directly to the current chain
+func (blockchain *Blockchain) CanAddDirectly(block *Block) error {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
+
+	// Basic validation first
+	if err := blockchain.validateBlock(block); err != nil {
+		return err
+	}
+
+	// Special case for genesis block
+	if len(blockchain.Blocks) == 0 {
+		return nil
+	}
+
+	// Get the latest block
+	latestBlock := blockchain.Blocks[len(blockchain.Blocks)-1]
+
+	// Check if this block extends the current chain
+	return blockchain.validateBlockForChain(block, latestBlock)
+}
+
+// TryAddBlockWithForkResolution attempts to add a block, handling forks if necessary
+func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error {
+	logger.L.WithFields(logger.Fields{
+		"blockIndex": block.Index,
+		"blockHash":  block.Hash,
+	}).Debug("Trying to add block with fork resolution")
+
+	// Try direct addition first
+	err := blockchain.CanAddDirectly(block)
+	if err == nil {
+		// Can add directly to current chain
+		return blockchain.AddBlock(block)
+	}
+
+	logger.L.WithFields(logger.Fields{
+		"blockIndex": block.Index,
+		"error":      err.Error(),
+	}).Debug("Cannot add block directly, checking for fork resolution")
+
+	// Check if this block references a known previous block (fork scenario)
+	blockchain.mutex.RLock()
+	prevBlock := blockchain.GetBlockByHash(block.PrevHash)
+	blockchain.mutex.RUnlock()
+
+	if prevBlock == nil {
+		logger.L.WithFields(logger.Fields{
+			"blockIndex":    block.Index,
+			"blockPrevHash": block.PrevHash,
+		}).Debug("Previous block not found, cannot place block")
+		return errors.New("previous block not found")
+	}
+
+	// Validate the block can extend from the found previous block
+	if err := blockchain.validateBlockForChain(block, prevBlock); err != nil {
+		logger.L.WithFields(logger.Fields{
+			"blockIndex": block.Index,
+			"error":      err.Error(),
+		}).Debug("Block cannot extend from found previous block")
+		return err
+	}
+
+	// This is a valid fork - for now, we'll use longest chain rule
+	// If the new block would create a longer chain, we should reorganize
+	blockchain.mutex.RLock()
+	currentHeight := uint64(len(blockchain.Blocks))
+	newChainHeight := block.Index + 1
+	blockchain.mutex.RUnlock()
+
+	logger.L.WithFields(logger.Fields{
+		"currentHeight":  currentHeight,
+		"newChainHeight": newChainHeight,
+		"blockIndex":     block.Index,
+	}).Debug("Comparing chain heights for fork resolution")
+
+	if newChainHeight > currentHeight {
+		logger.L.WithFields(logger.Fields{
+			"blockIndex":     block.Index,
+			"currentHeight":  currentHeight,
+			"newChainHeight": newChainHeight,
+		}).Info("New block creates longer chain, accepting it")
+		// For now, just add the block - in a full implementation,
+		// we would need to reorganize the chain
+		return blockchain.AddBlock(block)
+	} else {
+		logger.L.WithFields(logger.Fields{
+			"blockIndex":     block.Index,
+			"currentHeight":  currentHeight,
+			"newChainHeight": newChainHeight,
+		}).Debug("New block does not create longer chain, keeping current chain")
+		return errors.New("block creates shorter or equal chain")
+	}
 }
 
 // GetBlockByHash retrieves a block by its hash

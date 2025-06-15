@@ -306,19 +306,19 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 		return errors.New("invalid block signature")
 	}
 
-	// Try to add directly to blockchain
-	logger.L.WithField("blockIndex", block.Index).Debug("Checking if block can be added directly to chain")
-	err := ce.blockchain.IsBlockValid(block)
+	// Try to add block with fork resolution
+	logger.L.WithField("blockIndex", block.Index).Debug("Trying to add block with fork resolution")
+	err := ce.blockchain.TryAddBlockWithForkResolution(block)
 	if err == nil {
-		// Block fits directly into our chain
-		logger.L.WithField("blockIndex", block.Index).Debug("Block is valid, adding to blockchain")
-		err = ce.blockchain.AddBlockWithAutoSave(block)
+		// Block was successfully added
+		logger.L.WithField("blockIndex", block.Index).Debug("Block added successfully, saving to disk")
+		err = ce.blockchain.SaveToDisk()
 		if err != nil {
 			logger.L.WithFields(logger.Fields{
 				"blockIndex": block.Index,
 				"error":      err.Error(),
-			}).Error("Failed to add valid block to blockchain")
-			return fmt.Errorf("failed to add valid block: %v", err)
+			}).Error("Failed to save blockchain to disk after adding block")
+			return fmt.Errorf("failed to save blockchain: %v", err)
 		}
 
 		logger.L.WithFields(logger.Fields{
@@ -329,50 +329,13 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 		return nil
 	}
 
-	// Block doesn't fit directly, check if it's a fork
-	logger.L.WithFields(logger.Fields{
-		"blockIndex": block.Index,
-		"error":      err.Error(),
-	}).Debug("Block doesn't fit directly into chain, checking if it's a fork")
-
-	latestBlock := ce.blockchain.GetLatestBlock()
-
-	// Check if we have a genesis block before proceeding
-	if latestBlock == nil {
-		logger.L.Error("Cannot process fork: no genesis block found in blockchain")
-		return fmt.Errorf("no genesis block found, cannot process incoming block")
-	}
-
-	// If this block builds on our latest, but has a different hash, it's a competing block
-	if block.PrevHash == latestBlock.Hash && block.Hash != latestBlock.Hash {
-		logger.L.WithFields(logger.Fields{
-			"blockIndex":     block.Index,
-			"blockHash":      block.Hash,
-			"latestHash":     latestBlock.Hash,
-			"competingBlock": true,
-		}).Info("Received competing block at same height, potential fork")
-
-		// Add to competing chains
-		height := block.Index
-		ce.forks[height] = append(ce.forks[height], block)
-		logger.L.WithFields(logger.Fields{
-			"height":                  height,
-			"blockHash":               block.Hash,
-			"competingBlocksAtHeight": len(ce.forks[height]),
-		}).Debug("Added block to competing chains")
-
-		// Determine if this is now the longest chain
-		logger.L.Debug("Resolving forks to determine longest chain")
-		ce.resolveForks()
-		return nil
-	}
-
-	// Otherwise, it's a block we can't place yet - store for later processing
+	// Block couldn't be added - log the reason and store for later
 	logger.L.WithFields(logger.Fields{
 		"blockIndex":        block.Index,
 		"blockHash":         block.Hash,
+		"error":             err.Error(),
 		"pendingBlockCount": len(ce.pendingBlocks),
-	}).Debug("Block can't be placed yet, storing for later processing")
+	}).Info("Block couldn't be added to blockchain, storing for later processing")
 
 	ce.pendingBlocks[block.Hash] = block
 	return nil
@@ -463,11 +426,11 @@ func (ce *Engine) processPendingBlocks() {
 				"blockHash":  hash,
 			}).Debug("Attempting to process pending block")
 
-			err := ce.blockchain.IsBlockValid(block)
+			err := ce.blockchain.TryAddBlockWithForkResolution(block)
 			if err == nil {
-				// We can now add this block
-				logger.L.WithField("blockIndex", block.Index).Debug("Pending block is now valid, adding to blockchain")
-				err = ce.blockchain.AddBlockWithAutoSave(block)
+				// Block was successfully added
+				logger.L.WithField("blockIndex", block.Index).Debug("Pending block added successfully, saving to disk")
+				err = ce.blockchain.SaveToDisk()
 				if err == nil {
 					processed = append(processed, hash)
 					logger.L.WithFields(logger.Fields{
@@ -478,13 +441,13 @@ func (ce *Engine) processPendingBlocks() {
 					logger.L.WithFields(logger.Fields{
 						"blockIndex": block.Index,
 						"error":      err.Error(),
-					}).Warn("Failed to add pending block to blockchain")
+					}).Warn("Failed to save blockchain after adding pending block")
 				}
 			} else {
 				logger.L.WithFields(logger.Fields{
 					"blockIndex": block.Index,
 					"error":      err.Error(),
-				}).Debug("Pending block still not valid for blockchain")
+				}).Debug("Pending block still cannot be placed in blockchain")
 			}
 		}
 
