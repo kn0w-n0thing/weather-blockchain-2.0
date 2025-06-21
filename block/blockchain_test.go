@@ -921,39 +921,69 @@ func TestTryAddBlockWithForkResolution(t *testing.T) {
 	err = bc.AddBlock(genesisBlock)
 	require.NoError(t, err, "Should add genesis block without error")
 
-	// Test direct addition (normal case)
-	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2 Data")
-	require.NoError(t, err, "Should create second block without error")
+	// Test 1: Direct addition (normal case)
+	block1, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 1")
+	require.NoError(t, err, "Should create first block without error")
 
-	err = bc.TryAddBlockWithForkResolution(block2)
+	err = bc.TryAddBlockWithForkResolution(block1)
 	assert.NoError(t, err, "Valid block should be added directly")
 	assert.Len(t, bc.Blocks, 2, "Blockchain should have 2 blocks")
 
-	// Test fork resolution - creating another blockchain state for fork scenario
-	bc2 := NewBlockchain()
-	err = bc2.AddBlock(genesisBlock)
-	require.NoError(t, err, "Should add genesis block to second blockchain")
+	// Add another block to make current chain longer
+	block2, err := createSignedBlock(2, block1.Hash, acc, "Block 2")
+	require.NoError(t, err, "Should create second block without error")
 
-	// Create competing block at same height
-	competingBlock, err := createSignedBlock(1, genesisBlock.Hash, acc, "Competing Block")
+	err = bc.TryAddBlockWithForkResolution(block2)
+	assert.NoError(t, err, "Second block should be added directly")
+	assert.Len(t, bc.Blocks, 3, "Blockchain should have 3 blocks")
+
+	// Test 2: Fork resolution with reorganization (longer chain)
+	// Create a fork from block1 that replaces block2 (same height initially)
+	forkBlock2, err := createSignedBlock(2, block1.Hash, acc, "Fork Block 2")
+	require.NoError(t, err, "Should create fork block 2 without error")
+
+	// Create a third block on the fork to make it longer
+	forkBlock3, err := createSignedBlock(3, forkBlock2.Hash, acc, "Fork Block 3")
+	require.NoError(t, err, "Should create fork block 3 without error")
+
+	// Store initial state
+	initialLatestHash := bc.LatestHash
+	initialLength := len(bc.Blocks)
+
+	// Add forkBlock3 which should trigger reorganization because:
+	// 1. It can't be added directly (doesn't extend current tip)
+	// 2. Its prevHash (forkBlock2) references block1 which exists
+	// 3. It would create a longer chain (height 4 vs current height 3)
+	// However, this will fail because forkBlock2 is not in the chain yet
+	err = bc.TryAddBlockWithForkResolution(forkBlock3)
+	assert.Error(t, err, "Should fail because forkBlock2 is not in chain")
+	assert.Equal(t, "previous block not found", err.Error(), "Error should be about missing previous block")
+
+	// Test 3: Fork resolution - replacing current tip with same height
+	// Create a competing block at same height as block2
+	competingBlock2, err := createSignedBlock(2, block1.Hash, acc, "Competing Block 2")
 	require.NoError(t, err, "Should create competing block without error")
 
-	// This should work because it's a valid block extending from genesis
-	err = bc2.TryAddBlockWithForkResolution(competingBlock)
-	assert.NoError(t, err, "Competing block should be addable")
-	assert.Len(t, bc2.Blocks, 2, "Second blockchain should have 2 blocks")
+	// This should fail because it creates equal height chain
+	err = bc.TryAddBlockWithForkResolution(competingBlock2)
+	assert.Error(t, err, "Block creating equal chain should be rejected")
+	assert.Equal(t, "block creates shorter or equal chain", err.Error(), "Error message should be correct")
 
-	// Test block with unknown previous hash
-	unknownPrevBlock, err := createSignedBlock(2, "unknown_hash", acc, "Unknown Prev Block")
+	// Verify original chain is unchanged
+	assert.Equal(t, initialLatestHash, bc.LatestHash, "Chain should remain unchanged")
+	assert.Equal(t, initialLength, len(bc.Blocks), "Chain length should remain unchanged")
+
+	// Test 4: Block with unknown previous hash
+	unknownPrevBlock, err := createSignedBlock(4, "unknown_hash", acc, "Unknown Prev Block")
 	require.NoError(t, err, "Should create block with unknown previous hash")
 
 	err = bc.TryAddBlockWithForkResolution(unknownPrevBlock)
 	assert.Error(t, err, "Block with unknown previous hash should fail")
 	assert.Equal(t, "previous block not found", err.Error(), "Error message should be correct")
 
-	// Test invalid block (bad hash)
+	// Test 5: Invalid block (bad hash)
 	invalidBlock := &Block{
-		Index:            2,
+		Index:            3,
 		Timestamp:        time.Now().Unix(),
 		PrevHash:         block2.Hash,
 		ValidatorAddress: acc.Address,
@@ -964,4 +994,94 @@ func TestTryAddBlockWithForkResolution(t *testing.T) {
 	err = bc.TryAddBlockWithForkResolution(invalidBlock)
 	assert.Error(t, err, "Block with invalid hash should fail")
 	assert.Equal(t, "invalid block hash", err.Error(), "Error message should be correct")
+
+	// Test 6: Check final blockchain state (should be unchanged from all failed operations)
+	assert.Equal(t, initialLength, len(bc.Blocks), "Chain length should remain unchanged")
+	assert.Equal(t, initialLatestHash, bc.LatestHash, "Latest hash should remain unchanged")
+	assert.Equal(t, uint64(0), bc.Blocks[0].Index, "First block should be genesis")
+	assert.Equal(t, uint64(1), bc.Blocks[1].Index, "Second block should be block1") 
+	assert.Equal(t, uint64(2), bc.Blocks[2].Index, "Third block should be block2")
+	assert.True(t, bc.VerifyChain(), "Blockchain should be valid after all operations")
+}
+
+func TestReorganizeChain(t *testing.T) {
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err, "Failed to create test account")
+
+	// Create blockchain with genesis block
+	bc := NewBlockchain()
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Failed to create genesis block")
+	
+	err = bc.AddBlock(genesisBlock)
+	require.NoError(t, err, "Failed to add genesis block")
+
+	// Create first block on main chain
+	block1, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 1")
+	require.NoError(t, err, "Failed to create block 1")
+	
+	err = bc.AddBlock(block1)
+	require.NoError(t, err, "Failed to add block 1")
+
+	// Create second block on main chain
+	block2, err := createSignedBlock(2, block1.Hash, acc, "Block 2")
+	require.NoError(t, err, "Failed to create block 2")
+	
+	err = bc.AddBlock(block2)
+	require.NoError(t, err, "Failed to add block 2")
+
+	// Verify initial state
+	assert.Equal(t, 3, len(bc.Blocks), "Should have 3 blocks initially")
+	assert.Equal(t, block2.Hash, bc.LatestHash, "Latest hash should be block2")
+
+	// Create a fork block that replaces block2 (same height but different content)
+	forkBlock2, err := createSignedBlock(2, block1.Hash, acc, "Fork Block 2")
+	require.NoError(t, err, "Failed to create fork block 2")
+
+	// Test reorganization with a block at the same height (should replace current chain)
+	err = bc.reorganizeChain(forkBlock2)
+	require.NoError(t, err, "Reorganization should succeed")
+
+	// Verify reorganization results
+	assert.Equal(t, 3, len(bc.Blocks), "Should have 3 blocks after reorganization")
+	assert.Equal(t, forkBlock2.Hash, bc.LatestHash, "Latest hash should be fork block 2")
+	
+	// Verify the chain structure
+	assert.Equal(t, uint64(0), bc.Blocks[0].Index, "First block should be genesis")
+	assert.Equal(t, uint64(1), bc.Blocks[1].Index, "Second block should be block 1")
+	assert.Equal(t, uint64(2), bc.Blocks[2].Index, "Third block should be fork block 2")
+	assert.Equal(t, block1.Hash, bc.Blocks[2].PrevHash, "Fork block 2 should reference block 1")
+
+	// Test reorganization with invalid block (bad hash)
+	invalidBlock := &Block{
+		Index:            3,
+		Timestamp:        time.Now().Unix(),
+		PrevHash:         forkBlock2.Hash,
+		ValidatorAddress: acc.Address,
+		Data:             "Invalid Block",
+		Hash:             "invalid_hash",
+	}
+
+	err = bc.reorganizeChain(invalidBlock)
+	assert.Error(t, err, "Reorganization with invalid block should fail")
+	assert.Equal(t, "invalid block hash", err.Error(), "Error message should be correct")
+
+	// Test reorganization with block that has no common ancestor
+	orphanBlock := &Block{
+		Index:            2,
+		Timestamp:        time.Now().Unix(),
+		PrevHash:         "nonexistent_hash",
+		ValidatorAddress: acc.Address,
+		Data:             "Orphan Block",
+	}
+	orphanBlock.StoreHash()
+
+	err = bc.reorganizeChain(orphanBlock)
+	assert.Error(t, err, "Reorganization with orphan block should fail")
+	assert.Equal(t, "cannot find common ancestor", err.Error(), "Error message should be correct")
+
+	// Verify blockchain wasn't modified by failed reorganizations
+	assert.Equal(t, 3, len(bc.Blocks), "Block count should remain unchanged after failed reorganizations")
+	assert.Equal(t, forkBlock2.Hash, bc.LatestHash, "Latest hash should remain unchanged after failed reorganizations")
 }

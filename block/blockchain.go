@@ -252,10 +252,10 @@ func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error 
 			"blockIndex":     block.Index,
 			"currentHeight":  currentHeight,
 			"newChainHeight": newChainHeight,
-		}).Info("New block creates longer chain, accepting it")
-		// For now, just add the block - in a full implementation,
-		// we would need to reorganize the chain
-		return blockchain.AddBlock(block)
+		}).Info("New block creates longer chain, reorganizing blockchain")
+		
+		// Reorganize the blockchain to accept the longer chain
+		return blockchain.reorganizeChain(block)
 	} else {
 		logger.L.WithFields(logger.Fields{
 			"blockIndex":     block.Index,
@@ -264,6 +264,73 @@ func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error 
 		}).Debug("New block does not create longer chain, keeping current chain")
 		return errors.New("block creates shorter or equal chain")
 	}
+}
+
+// reorganizeChain reorganizes the blockchain to accept a longer chain
+func (blockchain *Blockchain) reorganizeChain(newBlock *Block) error {
+	logger.L.WithFields(logger.Fields{
+		"newBlockIndex": newBlock.Index,
+		"newBlockHash":  newBlock.Hash,
+	}).Debug("Starting blockchain reorganization")
+
+	blockchain.mutex.Lock()
+	defer blockchain.mutex.Unlock()
+
+	// Find the common ancestor (without acquiring additional locks)
+	var commonAncestor *Block
+	for _, block := range blockchain.Blocks {
+		if block.Hash == newBlock.PrevHash {
+			commonAncestor = block
+			break
+		}
+	}
+	
+	if commonAncestor == nil {
+		logger.L.WithField("prevHash", newBlock.PrevHash).Error("Cannot find common ancestor for reorganization")
+		return errors.New("cannot find common ancestor")
+	}
+
+	logger.L.WithFields(logger.Fields{
+		"ancestorIndex": commonAncestor.Index,
+		"ancestorHash":  commonAncestor.Hash,
+	}).Debug("Found common ancestor for chain reorganization")
+
+	// Build the new chain from the common ancestor
+	newChain := make([]*Block, 0)
+	
+	// Add blocks up to and including the common ancestor
+	for i := 0; i <= int(commonAncestor.Index); i++ {
+		if i < len(blockchain.Blocks) {
+			newChain = append(newChain, blockchain.Blocks[i])
+		}
+	}
+
+	// Validate the new block first
+	if err := blockchain.validateBlock(newBlock); err != nil {
+		logger.L.WithFields(logger.Fields{
+			"blockIndex": newBlock.Index,
+			"error":      err.Error(),
+		}).Error("New block validation failed during reorganization")
+		return err
+	}
+
+	// Store hash in the new block
+	newBlock.StoreHash()
+	
+	// Add the new block to the chain
+	newChain = append(newChain, newBlock)
+
+	// Replace the blockchain with the new chain
+	blockchain.Blocks = newChain
+	blockchain.LatestHash = newBlock.Hash
+
+	logger.L.WithFields(logger.Fields{
+		"newChainLength": len(newChain),
+		"newLatestHash":  blockchain.LatestHash,
+		"reorganizedTo":  newBlock.Index,
+	}).Info("Blockchain reorganization completed successfully")
+
+	return nil
 }
 
 // GetBlockByHash retrieves a block by its hash
