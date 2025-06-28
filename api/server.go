@@ -54,10 +54,12 @@ func (s *Server) Start() error {
 	// Register routes
 	mux.HandleFunc("/", s.handleHome)
 	mux.HandleFunc("/api/health", s.handleHealth)
-	mux.HandleFunc("/api/nodes", s.handleGetNodes)
+	mux.HandleFunc("/api/nodes", s.handleGetDiscoveredNodes)
 	mux.HandleFunc("/api/nodes/discover", s.handleDiscoverNodes)
 	mux.HandleFunc("/api/blockchain/info", s.handleBlockchainInfo)
 	mux.HandleFunc("/api/blockchain/blocks/", s.handleGetBlock)
+	mux.HandleFunc("/api/blockchain/height", s.handleBlockchainHeight)
+	mux.HandleFunc("/api/blockchain/latest/", s.handleLatestBlocks)
 	mux.HandleFunc("/api/blockchain/compare", s.handleCompareNodes)
 
 	s.httpServer = &http.Server{
@@ -114,7 +116,7 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 func (s *Server) writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	
+
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		logger.L.WithError(err).Error("Failed to encode JSON response")
 	}
@@ -151,12 +153,14 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		"version":     "1.0.0",
 		"description": "REST API for monitoring and interacting with weather blockchain nodes",
 		"endpoints": map[string]string{
-			"GET /api/health":             "Health check",
-			"GET /api/nodes":              "List discovered blockchain nodes",
-			"POST /api/nodes/discover":    "Trigger node discovery",
-			"GET /api/blockchain/info":    "Get blockchain information from all nodes",
-			"GET /api/blockchain/blocks/": "Get specific block from nodes",
-			"GET /api/blockchain/compare": "Compare blockchain states across nodes",
+			"GET /api/health":                "Health check",
+			"GET /api/nodes":                 "List discovered blockchain nodes",
+			"POST /api/nodes/discover":       "Trigger node discovery",
+			"GET /api/blockchain/info":       "Get blockchain information from all nodes",
+			"GET /api/blockchain/blocks/":    "Get specific block from nodes",
+			"GET /api/blockchain/height":     "Get blockchain height from all nodes",
+			"GET /api/blockchain/latest/{n}": "Get the n latest blocks from blockchain",
+			"GET /api/blockchain/compare":    "Compare blockchain states across nodes",
 		},
 		"timestamp": time.Now(),
 	}
@@ -175,10 +179,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.writeSuccess(w, healthData, "API server is healthy")
 }
 
-// handleGetNodes handles requests to get discovered nodes
-func (s *Server) handleGetNodes(w http.ResponseWriter, r *http.Request) {
+// handleGetDiscoveredNodes handles requests to get discovered nodes
+func (s *Server) handleGetDiscoveredNodes(w http.ResponseWriter, r *http.Request) {
 	nodes := s.nodeClient.GetDiscoveredNodes()
-	
+
 	responseData := map[string]interface{}{
 		"nodes":      nodes,
 		"node_count": len(nodes),
@@ -290,9 +294,9 @@ func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
 		}
 
 		responseData := map[string]interface{}{
-			"block":      block,
-			"node_id":    nodeID,
-			"timestamp":  time.Now(),
+			"block":     block,
+			"node_id":   nodeID,
+			"timestamp": time.Now(),
 		}
 
 		s.writeSuccess(w, responseData, fmt.Sprintf("Retrieved block %d from node %s", blockIndex, nodeID))
@@ -318,11 +322,11 @@ func (s *Server) handleGetBlock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responseData := map[string]interface{}{
-		"block_index":     blockIndex,
-		"nodes":           blockResponses,
-		"total_nodes":     len(nodes),
+		"block_index":         blockIndex,
+		"nodes":               blockResponses,
+		"total_nodes":         len(nodes),
 		"successful_requests": successCount,
-		"timestamp":       time.Now(),
+		"timestamp":           time.Now(),
 	}
 
 	message := fmt.Sprintf("Retrieved block %d from %d/%d nodes", blockIndex, successCount, len(nodes))
@@ -354,10 +358,10 @@ func (s *Server) handleCompareNodes(w http.ResponseWriter, r *http.Request) {
 				"info": info,
 				"node": node,
 			}
-			
+
 			// Count hash occurrences
 			hashCounts[info.LatestHash]++
-			// Count height occurrences  
+			// Count height occurrences
 			heightCounts[uint64(info.TotalBlocks)]++
 		}
 	}
@@ -378,4 +382,222 @@ func (s *Server) handleCompareNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeSuccess(w, responseData, "Blockchain state comparison completed")
+}
+
+// handleBlockchainHeight gets the height of the blockchain from discovered nodes
+func (s *Server) handleBlockchainHeight(w http.ResponseWriter, r *http.Request) {
+	logger.L.Debug("API: Handling blockchain height request")
+
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Only GET method is allowed")
+		return
+	}
+
+	// Get discovered nodes
+	nodes := s.nodeClient.GetDiscoveredNodes()
+	if len(nodes) == 0 {
+		s.writeError(w, http.StatusServiceUnavailable, "No blockchain nodes discovered")
+		return
+	}
+
+	nodeHeights := make(map[string]interface{})
+	var maxHeight uint64 = 0
+	var consensusHeight uint64 = 0
+	heightCounts := make(map[uint64]int)
+
+	// Get blockchain info from each node to determine height
+	for _, node := range nodes {
+		logger.L.WithFields(logrus.Fields{
+			"nodeID":  node.NodeID,
+			"address": node.Address,
+		}).Debug("Getting blockchain height from node")
+
+		info, err := s.nodeClient.RequestBlockchainInfo(node.Address)
+		if err != nil {
+			logger.L.WithError(err).WithField("nodeID", node.NodeID).Warn("Failed to get blockchain info from node")
+			nodeHeights[node.NodeID] = map[string]interface{}{
+				"height": nil,
+				"error":  err.Error(),
+			}
+			continue
+		}
+
+		height := uint64(info.TotalBlocks)
+		if height > 0 {
+			height = height - 1 // Convert from count to height (0-indexed)
+		}
+
+		nodeHeights[node.NodeID] = map[string]interface{}{
+			"height":       height,
+			"total_blocks": info.TotalBlocks,
+			"latest_hash":  info.LatestHash,
+		}
+
+		// Track height statistics
+		heightCounts[height]++
+		if height > maxHeight {
+			maxHeight = height
+		}
+	}
+
+	// Determine consensus height (most common height)
+	maxCount := 0
+	for height, count := range heightCounts {
+		if count > maxCount {
+			maxCount = count
+			consensusHeight = height
+		}
+	}
+
+	responseData := map[string]interface{}{
+		"max_height":          maxHeight,
+		"consensus_height":    consensusHeight,
+		"node_heights":        nodeHeights,
+		"height_distribution": heightCounts,
+		"total_nodes":         len(nodes),
+		"timestamp":           time.Now(),
+	}
+
+	s.writeSuccess(w, responseData, "Blockchain height retrieved successfully")
+}
+
+// handleLatestBlocks gets the n latest blocks from the blockchain
+func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
+	logger.L.Debug("API: Handling latest blocks request")
+
+	if r.Method != http.MethodGet {
+		s.writeError(w, http.StatusMethodNotAllowed, "Only GET method is allowed")
+		return
+	}
+
+	// Extract n from URL path /api/blockchain/latest/{n}
+	path := strings.TrimPrefix(r.URL.Path, "/api/blockchain/latest/")
+	if path == "" {
+		s.writeError(w, http.StatusBadRequest, "Missing number of blocks parameter. Use /api/blockchain/latest/{n}")
+		return
+	}
+
+	n, err := strconv.Atoi(path)
+	if err != nil || n <= 0 {
+		s.writeError(w, http.StatusBadRequest, "Invalid number of blocks. Must be a positive integer")
+		return
+	}
+
+	if n > 100 {
+		s.writeError(w, http.StatusBadRequest, "Number of blocks cannot exceed 100")
+		return
+	}
+
+	// Get discovered nodes
+	nodes := s.nodeClient.GetDiscoveredNodes()
+	if len(nodes) == 0 {
+		s.writeError(w, http.StatusServiceUnavailable, "No blockchain nodes discovered")
+		return
+	}
+
+	// Check for specific node query parameter
+	nodeIDParam := r.URL.Query().Get("node")
+
+	nodeResults := make(map[string]interface{})
+
+	for _, node := range nodes {
+		// If specific node requested, skip others
+		if nodeIDParam != "" && node.NodeID != nodeIDParam {
+			continue
+		}
+
+		logger.L.WithFields(logrus.Fields{
+			"nodeID":  node.NodeID,
+			"address": node.Address,
+			"blocks":  n,
+		}).Debug("Getting latest blocks from node")
+
+		// First get blockchain info to determine the latest block index
+		info, err := s.nodeClient.RequestBlockchainInfo(node.Address)
+		if err != nil {
+			logger.L.WithError(err).WithField("nodeID", node.NodeID).Warn("Failed to get blockchain info from node")
+			nodeResults[node.NodeID] = map[string]interface{}{
+				"blocks": nil,
+				"error":  err.Error(),
+			}
+			continue
+		}
+
+		totalBlocks := info.TotalBlocks
+		if totalBlocks == 0 {
+			nodeResults[node.NodeID] = map[string]interface{}{
+				"blocks":  []interface{}{},
+				"count":   0,
+				"message": "No blocks found in blockchain",
+			}
+			continue
+		}
+
+		// Calculate the range of blocks to fetch
+		latestIndex := uint64(totalBlocks - 1) // Convert to 0-indexed
+		startIndex := uint64(0)
+		if latestIndex >= uint64(n-1) {
+			startIndex = latestIndex - uint64(n-1)
+		}
+
+		// Fetch the blocks
+		var blocks []interface{}
+		var fetchErrors []string
+
+		for i := startIndex; i <= latestIndex; i++ {
+			block, err := s.nodeClient.RequestBlock(node.Address, i)
+			if err != nil {
+				logger.L.WithError(err).WithFields(logrus.Fields{
+					"nodeID":     node.NodeID,
+					"blockIndex": i,
+				}).Warn("Failed to get block from node")
+				fetchErrors = append(fetchErrors, fmt.Sprintf("Block %d: %s", i, err.Error()))
+				continue
+			}
+
+			if block != nil {
+				blocks = append(blocks, map[string]interface{}{
+					"index":             block.Index,
+					"timestamp":         block.Timestamp,
+					"hash":              block.Hash,
+					"prev_hash":         block.PrevHash,
+					"data":              block.Data,
+					"validator_address": block.ValidatorAddress,
+				})
+			}
+		}
+
+		// Reverse blocks to show latest first
+		for i, j := 0, len(blocks)-1; i < j; i, j = i+1, j-1 {
+			blocks[i], blocks[j] = blocks[j], blocks[i]
+		}
+
+		result := map[string]interface{}{
+			"blocks":       blocks,
+			"count":        len(blocks),
+			"requested":    n,
+			"latest_index": latestIndex,
+			"total_blocks": totalBlocks,
+		}
+
+		if len(fetchErrors) > 0 {
+			result["errors"] = fetchErrors
+		}
+
+		nodeResults[node.NodeID] = result
+	}
+
+	if len(nodeResults) == 0 {
+		s.writeError(w, http.StatusNotFound, "No results from any nodes")
+		return
+	}
+
+	responseData := map[string]interface{}{
+		"node_results":     nodeResults,
+		"requested_blocks": n,
+		"total_nodes":      len(nodeResults),
+		"timestamp":        time.Now(),
+	}
+
+	s.writeSuccess(w, responseData, fmt.Sprintf("Retrieved latest %d blocks successfully", n))
 }
