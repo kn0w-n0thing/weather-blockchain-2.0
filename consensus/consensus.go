@@ -329,13 +329,23 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 		return nil
 	}
 
-	// Block couldn't be added - log the reason and store for later
+	// Block couldn't be added - check if we need to sync missing blocks
 	logger.L.WithFields(logger.Fields{
 		"blockIndex":        block.Index,
 		"blockHash":         block.Hash,
 		"error":             err.Error(),
 		"pendingBlockCount": len(ce.pendingBlocks),
-	}).Info("Block couldn't be added to blockchain, storing for later processing")
+	}).Info("Block couldn't be added to blockchain, checking for sync requirements")
+
+	// Check if this is a gap issue (missing previous blocks)
+	if err.Error() == "previous block not found" {
+		logger.L.WithFields(logger.Fields{
+			"blockIndex":    block.Index,
+			"blockPrevHash": block.PrevHash,
+		}).Info("Detected blockchain gap, triggering synchronization")
+
+		go ce.requestMissingBlocks(block)
+	}
 
 	ce.pendingBlocks[block.Hash] = block
 	return nil
@@ -578,4 +588,67 @@ func (ce *Engine) GetPendingBlockCount() int {
 	ce.mutex.RLock()
 	defer ce.mutex.RUnlock()
 	return len(ce.pendingBlocks)
+}
+
+// requestMissingBlocks attempts to synchronize missing blocks when a gap is detected
+func (ce *Engine) requestMissingBlocks(futureBlock *block.Block) {
+	logger.L.WithFields(logger.Fields{
+		"futureBlockIndex": futureBlock.Index,
+		"futureBlockHash":  futureBlock.Hash,
+		"prevHash":         futureBlock.PrevHash,
+	}).Info("Starting missing block synchronization")
+
+	// Get current blockchain state
+	latestBlock := ce.blockchain.GetLatestBlock()
+	if latestBlock == nil {
+		logger.L.Error("Cannot sync missing blocks: no genesis block found")
+		return
+	}
+
+	expectedNextIndex := latestBlock.Index + 1
+	gapSize := futureBlock.Index - expectedNextIndex
+
+	logger.L.WithFields(logger.Fields{
+		"currentLatestIndex": latestBlock.Index,
+		"expectedNextIndex":  expectedNextIndex,
+		"futureBlockIndex":   futureBlock.Index,
+		"gapSize":            gapSize,
+	}).Info("Detected blockchain gap, requesting missing blocks")
+
+	// Get available peers from the network broadcaster (Node)
+	peerGetter, ok := ce.networkBroadcaster.(interface{ GetPeers() map[string]string })
+	if !ok {
+		logger.L.Error("Network broadcaster doesn't support peer access")
+		return
+	}
+
+	peers := peerGetter.GetPeers()
+	if len(peers) == 0 {
+		logger.L.Warn("No peers available for block synchronization")
+		return
+	}
+
+	// Request missing blocks range from peers using existing network broadcaster
+	logger.L.WithFields(logger.Fields{
+		"startIndex": expectedNextIndex,
+		"endIndex":   futureBlock.Index,
+	}).Info("Requesting missing block range via network broadcaster")
+
+	ce.requestBlockRangeViaNetworkBroadcaster(expectedNextIndex, futureBlock.Index)
+}
+
+// requestBlockRangeViaNetworkBroadcaster requests a range of blocks using the network broadcaster interface
+func (ce *Engine) requestBlockRangeViaNetworkBroadcaster(startIndex, endIndex uint64) {
+	logger.L.WithFields(logger.Fields{
+		"startIndex": startIndex,
+		"endIndex":   endIndex,
+		"blockCount": endIndex - startIndex,
+	}).Info("Requesting block range via network broadcaster")
+
+	// Use the network broadcaster's SendBlockRangeRequest method
+	ce.networkBroadcaster.SendBlockRangeRequest(startIndex, endIndex)
+	logger.L.WithFields(logger.Fields{
+		"startIndex": startIndex,
+		"endIndex":   endIndex,
+	}).Info("Block range request sent via network broadcaster")
 }

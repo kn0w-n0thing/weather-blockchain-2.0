@@ -400,3 +400,215 @@ func NewMockBlockProvider() *MockBlockProvider {
 		blocks: make(map[uint64]*block.Block),
 	}
 }
+
+// TestSendBlockRequest tests single block request functionality
+func TestSendBlockRequest(t *testing.T) {
+	node := NewNode("test-node", 8010)
+	
+	// Add some mock peers
+	node.peerMutex.Lock()
+	node.Peers["peer1"] = "localhost:8011"
+	node.Peers["peer2"] = "localhost:8012"
+	node.peerMutex.Unlock()
+
+	// Test that SendBlockRequest doesn't panic
+	assert.NotPanics(t, func() {
+		node.SendBlockRequest(5)
+	}, "SendBlockRequest should not panic")
+}
+
+// TestSendBlockRequest_NoPeers tests single block request with no peers
+func TestSendBlockRequest_NoPeers(t *testing.T) {
+	node := NewNode("test-node", 8013)
+	
+	// No peers added - should handle gracefully
+	assert.NotPanics(t, func() {
+		node.SendBlockRequest(5)
+	}, "SendBlockRequest should handle no peers gracefully")
+}
+
+// TestSendBlockRangeRequest tests block range request functionality
+func TestSendBlockRangeRequest(t *testing.T) {
+	node := NewNode("test-node", 8014)
+	
+	// Add some mock peers
+	node.peerMutex.Lock()
+	node.Peers["peer1"] = "localhost:8015"
+	node.Peers["peer2"] = "localhost:8016"
+	node.peerMutex.Unlock()
+
+	// Test that SendBlockRangeRequest doesn't panic
+	assert.NotPanics(t, func() {
+		node.SendBlockRangeRequest(1, 5)
+	}, "SendBlockRangeRequest should not panic")
+}
+
+// TestSendBlockRangeRequest_NoPeers tests range request with no peers
+func TestSendBlockRangeRequest_NoPeers(t *testing.T) {
+	node := NewNode("test-node", 8017)
+	
+	// No peers added - should handle gracefully
+	assert.NotPanics(t, func() {
+		node.SendBlockRangeRequest(1, 5)
+	}, "SendBlockRangeRequest should handle no peers gracefully")
+}
+
+// TestMessageTypes tests that all message types are properly defined
+func TestMessageTypes(t *testing.T) {
+	assert.Equal(t, MessageType(0), MessageTypeBlock)
+	assert.Equal(t, MessageType(1), MessageTypeBlockRequest)
+	assert.Equal(t, MessageType(2), MessageTypeBlockResponse)
+	assert.Equal(t, MessageType(3), MessageTypeBlockRangeRequest)
+	assert.Equal(t, MessageType(4), MessageTypeBlockRangeResponse)
+}
+
+// TestBlockRangeRequestMessage tests the BlockRangeRequestMessage struct
+func TestBlockRangeRequestMessage(t *testing.T) {
+	msg := BlockRangeRequestMessage{
+		StartIndex: 5,
+		EndIndex:   10,
+	}
+	
+	assert.Equal(t, uint64(5), msg.StartIndex)
+	assert.Equal(t, uint64(10), msg.EndIndex)
+}
+
+// TestBlockRangeResponseMessage tests the BlockRangeResponseMessage struct
+func TestBlockRangeResponseMessage(t *testing.T) {
+	// Create some test blocks
+	block1 := &block.Block{Index: 1, Data: "Block 1"}
+	block2 := &block.Block{Index: 2, Data: "Block 2"}
+	blocks := []*block.Block{block1, block2}
+	
+	msg := BlockRangeResponseMessage{
+		StartIndex: 1,
+		EndIndex:   3,
+		Blocks:     blocks,
+	}
+	
+	assert.Equal(t, uint64(1), msg.StartIndex)
+	assert.Equal(t, uint64(3), msg.EndIndex)
+	assert.Len(t, msg.Blocks, 2)
+	assert.Equal(t, "Block 1", msg.Blocks[0].Data)
+	assert.Equal(t, "Block 2", msg.Blocks[1].Data)
+}
+
+// TestBlockProviderSetup tests setting up blocks for range requests
+func TestBlockProviderSetup(t *testing.T) {
+	mockProvider := NewMockBlockProvider()
+	
+	// Add some test blocks
+	block1 := &block.Block{Index: 1, Data: "Block 1", Hash: "hash1"}
+	block2 := &block.Block{Index: 2, Data: "Block 2", Hash: "hash2"}
+	block3 := &block.Block{Index: 3, Data: "Block 3", Hash: "hash3"}
+	
+	mockProvider.blocks[1] = block1
+	mockProvider.blocks[2] = block2
+	mockProvider.blocks[3] = block3
+	
+	// Test retrieval
+	assert.Equal(t, block1, mockProvider.GetBlockByIndex(1))
+	assert.Equal(t, block2, mockProvider.GetBlockByIndex(2))
+	assert.Equal(t, block3, mockProvider.GetBlockByIndex(3))
+	assert.Nil(t, mockProvider.GetBlockByIndex(4)) // Non-existent block
+	
+	// Test block count
+	assert.Equal(t, 3, mockProvider.GetBlockCount())
+	
+	// Test get by hash
+	assert.Equal(t, block1, mockProvider.GetBlockByHash("hash1"))
+	assert.Nil(t, mockProvider.GetBlockByHash("nonexistent"))
+	
+	// Test latest block
+	latest := mockProvider.GetLatestBlock()
+	assert.NotNil(t, latest)
+	assert.Equal(t, uint64(3), latest.Index)
+}
+
+// TestBroadcasterInterface tests that Node implements Broadcaster interface
+func TestBroadcasterInterface(t *testing.T) {
+	node := NewNode("test-node", 8018)
+	
+	// Test that node implements Broadcaster interface
+	var broadcaster Broadcaster = node
+	assert.NotNil(t, broadcaster)
+	
+	// Test BroadcastBlock method exists
+	testBlock := &block.Block{Index: 1, Data: "Test Block"}
+	assert.NotPanics(t, func() {
+		broadcaster.BroadcastBlock(testBlock)
+	}, "BroadcastBlock should not panic")
+	
+	// Test SendBlockRequest method exists
+	assert.NotPanics(t, func() {
+		broadcaster.SendBlockRequest(5)
+	}, "SendBlockRequest should not panic")
+	
+	// Test SendBlockRangeRequest method exists
+	assert.NotPanics(t, func() {
+		broadcaster.SendBlockRangeRequest(1, 5)
+	}, "SendBlockRangeRequest should not panic")
+}
+
+// TestGetPeersInterface tests GetPeers functionality
+func TestGetPeersInterface(t *testing.T) {
+	node := NewNode("test-node", 8019)
+	
+	// Initially no peers
+	peers := node.GetPeers()
+	assert.Empty(t, peers)
+	
+	// Add some peers
+	node.peerMutex.Lock()
+	node.Peers["peer1"] = "localhost:8020"
+	node.Peers["peer2"] = "localhost:8021"
+	node.peerMutex.Unlock()
+	
+	// Get peers should return a copy
+	peers = node.GetPeers()
+	assert.Len(t, peers, 2)
+	assert.Equal(t, "localhost:8020", peers["peer1"])
+	assert.Equal(t, "localhost:8021", peers["peer2"])
+	
+	// Modifying returned map should not affect original
+	peers["peer3"] = "localhost:8022"
+	originalPeers := node.GetPeers()
+	assert.Len(t, originalPeers, 2) // Should still be 2, not 3
+}
+
+// TestRangeRequestWithMockProvider tests range request handling with block provider
+func TestRangeRequestWithMockProvider(t *testing.T) {
+	node := NewNode("test-node", 8023)
+	
+	// Create and set up mock block provider
+	mockProvider := NewMockBlockProvider()
+	for i := uint64(1); i <= 5; i++ {
+		mockProvider.blocks[i] = &block.Block{
+			Index: i,
+			Data:  fmt.Sprintf("Block %d", i),
+			Hash:  fmt.Sprintf("hash%d", i),
+		}
+	}
+	node.SetBlockProvider(mockProvider)
+	
+	// Test that block provider is working
+	block3 := mockProvider.GetBlockByIndex(3)
+	assert.NotNil(t, block3)
+	assert.Equal(t, uint64(3), block3.Index)
+	assert.Equal(t, "Block 3", block3.Data)
+	
+	// Test range [1, 4) should return blocks 1, 2, 3
+	var resultBlocks []*block.Block
+	for i := uint64(1); i < 4; i++ {
+		resultBlocks = append(resultBlocks, mockProvider.GetBlockByIndex(i))
+	}
+	
+	assert.Len(t, resultBlocks, 3)
+	assert.Equal(t, uint64(1), resultBlocks[0].Index)
+	assert.Equal(t, uint64(2), resultBlocks[1].Index)
+	assert.Equal(t, uint64(3), resultBlocks[2].Index)
+	
+	// Test non-existent block returns nil
+	nonExistent := mockProvider.GetBlockByIndex(10)
+	assert.Nil(t, nonExistent)
+}

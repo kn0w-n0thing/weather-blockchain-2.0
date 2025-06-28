@@ -20,6 +20,8 @@ const (
 	MessageTypeBlock MessageType = iota
 	MessageTypeBlockRequest
 	MessageTypeBlockResponse
+	MessageTypeBlockRangeRequest
+	MessageTypeBlockRangeResponse
 )
 
 // Message represents a network message
@@ -38,9 +40,22 @@ type BlockRequestMessage struct {
 	Index uint64 `json:"index"`
 }
 
+// BlockRangeRequestMessage is used to request a range of blocks
+type BlockRangeRequestMessage struct {
+	StartIndex uint64 `json:"start_index"`
+	EndIndex   uint64 `json:"end_index"`
+}
+
 // BlockResponseMessage is the response to a block request
 type BlockResponseMessage struct {
 	Block *block.Block `json:"block"`
+}
+
+// BlockRangeResponseMessage is the response to a block range request
+type BlockRangeResponseMessage struct {
+	StartIndex uint64         `json:"start_index"`
+	EndIndex   uint64         `json:"end_index"`
+	Blocks     []*block.Block `json:"blocks"`
 }
 
 const TcpNetwork = "tcp"
@@ -63,6 +78,8 @@ type BlockProvider interface {
 // Broadcaster NetworkBroadcaster interface for broadcasting blocks to the network
 type Broadcaster interface {
 	BroadcastBlock(block *block.Block)
+	SendBlockRequest(blockIndex uint64)
+	SendBlockRangeRequest(startIndex, endIndex uint64)
 }
 
 // Node represents a P2P node
@@ -544,6 +561,187 @@ func (node *Node) BroadcastBlock(blk *block.Block) {
 	}
 }
 
+// SendBlockRequest sends a block request to all peers
+func (node *Node) SendBlockRequest(blockIndex uint64) {
+	logger.L.WithFields(logger.Fields{
+		"node":       node.String(),
+		"blockIndex": blockIndex,
+	}).Info("SendBlockRequest: Sending block request to all peers")
+
+	node.peerMutex.RLock()
+	peers := make(map[string]string)
+	for id, addr := range node.Peers {
+		peers[id] = addr
+	}
+	node.peerMutex.RUnlock()
+
+	if len(peers) == 0 {
+		logger.L.Warn("SendBlockRequest: No peers available for block request")
+		return
+	}
+
+	// Send request to all peers concurrently
+	for peerID, peerAddr := range peers {
+		go func(id, addr string) {
+			logger.L.WithFields(logger.Fields{
+				"peerID":     id,
+				"peerAddr":   addr,
+				"blockIndex": blockIndex,
+			}).Debug("SendBlockRequest: Sending request to peer")
+
+			if err := node.sendBlockRequestToPeer(addr, blockIndex); err != nil {
+				logger.L.WithFields(logger.Fields{
+					"peerID":     id,
+					"peerAddr":   addr,
+					"blockIndex": blockIndex,
+					"error":      err,
+				}).Warn("SendBlockRequest: Failed to send request to peer")
+			} else {
+				logger.L.WithFields(logger.Fields{
+					"peerID":     id,
+					"blockIndex": blockIndex,
+				}).Info("SendBlockRequest: Successfully sent request to peer")
+			}
+		}(peerID, peerAddr)
+	}
+}
+
+// SendBlockRangeRequest sends a block range request to all peers
+func (node *Node) SendBlockRangeRequest(startIndex, endIndex uint64) {
+	logger.L.WithFields(logger.Fields{
+		"node":       node.String(),
+		"startIndex": startIndex,
+		"endIndex":   endIndex,
+		"blockCount": endIndex - startIndex,
+	}).Info("SendBlockRangeRequest: Sending block range request to all peers")
+
+	node.peerMutex.RLock()
+	peers := make(map[string]string)
+	for id, addr := range node.Peers {
+		peers[id] = addr
+	}
+	node.peerMutex.RUnlock()
+
+	if len(peers) == 0 {
+		logger.L.Warn("SendBlockRangeRequest: No peers available for block range request")
+		return
+	}
+
+	// Send range request to all peers concurrently
+	for peerID, peerAddr := range peers {
+		go func(id, addr string) {
+			logger.L.WithFields(logger.Fields{
+				"peerID":     id,
+				"peerAddr":   addr,
+				"startIndex": startIndex,
+				"endIndex":   endIndex,
+			}).Debug("SendBlockRangeRequest: Sending range request to peer")
+
+			if err := node.sendBlockRangeRequestToPeer(addr, startIndex, endIndex); err != nil {
+				logger.L.WithFields(logger.Fields{
+					"peerID":     id,
+					"peerAddr":   addr,
+					"startIndex": startIndex,
+					"endIndex":   endIndex,
+					"error":      err,
+				}).Warn("SendBlockRangeRequest: Failed to send range request to peer")
+			} else {
+				logger.L.WithFields(logger.Fields{
+					"peerID":     id,
+					"startIndex": startIndex,
+					"endIndex":   endIndex,
+				}).Info("SendBlockRangeRequest: Successfully sent range request to peer")
+			}
+		}(peerID, peerAddr)
+	}
+}
+
+// sendBlockRequestToPeer sends a block request to a specific peer
+func (node *Node) sendBlockRequestToPeer(peerAddr string, blockIndex uint64) error {
+	conn, err := net.Dial("tcp", peerAddr)
+	if err != nil {
+		return fmt.Errorf("failed to connect to peer %s: %v", peerAddr, err)
+	}
+	defer conn.Close()
+
+	// Create block request message
+	blockReq := BlockRequestMessage{
+		Index: blockIndex,
+	}
+
+	requestPayload, err := json.Marshal(blockReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal block request: %v", err)
+	}
+
+	requestMsg := Message{
+		Type:    MessageTypeBlockRequest,
+		Payload: requestPayload,
+	}
+
+	requestData, err := json.Marshal(requestMsg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request message: %v", err)
+	}
+
+	// Send the request
+	_, err = conn.Write(requestData)
+	if err != nil {
+		return fmt.Errorf("failed to send block request: %v", err)
+	}
+
+	logger.L.WithFields(logger.Fields{
+		"peerAddr":   peerAddr,
+		"blockIndex": blockIndex,
+	}).Debug("sendBlockRequestToPeer: Block request sent successfully")
+
+	return nil
+}
+
+// sendBlockRangeRequestToPeer sends a block range request to a specific peer
+func (node *Node) sendBlockRangeRequestToPeer(peerAddr string, startIndex, endIndex uint64) error {
+	conn, err := net.Dial("tcp", peerAddr)
+	if err != nil {
+		return fmt.Errorf("failed to connect to peer %s: %v", peerAddr, err)
+	}
+	defer conn.Close()
+
+	// Create block range request message
+	blockRangeReq := BlockRangeRequestMessage{
+		StartIndex: startIndex,
+		EndIndex:   endIndex,
+	}
+
+	requestPayload, err := json.Marshal(blockRangeReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal block range request: %v", err)
+	}
+
+	requestMsg := Message{
+		Type:    MessageTypeBlockRangeRequest,
+		Payload: requestPayload,
+	}
+
+	requestData, err := json.Marshal(requestMsg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal range request message: %v", err)
+	}
+
+	// Send the request
+	_, err = conn.Write(requestData)
+	if err != nil {
+		return fmt.Errorf("failed to send block range request: %v", err)
+	}
+
+	logger.L.WithFields(logger.Fields{
+		"peerAddr":   peerAddr,
+		"startIndex": startIndex,
+		"endIndex":   endIndex,
+	}).Debug("sendBlockRangeRequestToPeer: Block range request sent successfully")
+
+	return nil
+}
+
 // GetIncomingBlocksChannel returns the channel for receiving incoming blocks
 func (node *Node) GetIncomingBlocksChannel() <-chan *block.Block {
 	logger.L.WithFields(logger.Fields{
@@ -880,6 +1078,136 @@ func (node *Node) handleConnection(conn net.Conn) {
 			} else {
 				logger.L.Debug("handleConnection: Received empty block response (block not found)")
 			}
+
+		case MessageTypeBlockRangeRequest:
+			logger.L.Debug("handleConnection: Processing block range request message")
+
+			var blockRangeReq BlockRangeRequestMessage
+			if err := json.Unmarshal(msg.Payload, &blockRangeReq); err != nil {
+				logger.L.WithError(err).Error("handleConnection: Failed to unmarshal block range request")
+				continue
+			}
+
+			logger.L.WithFields(logger.Fields{
+				"startIndex": blockRangeReq.StartIndex,
+				"endIndex":   blockRangeReq.EndIndex,
+				"blockCount": blockRangeReq.EndIndex - blockRangeReq.StartIndex,
+			}).Info("handleConnection: Received block range request")
+
+			// Collect all blocks in the requested range
+			var blocks []*block.Block
+			for blockIndex := blockRangeReq.StartIndex; blockIndex < blockRangeReq.EndIndex; blockIndex++ {
+				var responseBlock *block.Block
+				if node.blockProvider != nil {
+					responseBlock = node.blockProvider.GetBlockByIndex(blockIndex)
+				}
+				blocks = append(blocks, responseBlock)
+			}
+
+			// Create range response message with all blocks
+			blockRangeResp := BlockRangeResponseMessage{
+				StartIndex: blockRangeReq.StartIndex,
+				EndIndex:   blockRangeReq.EndIndex,
+				Blocks:     blocks,
+			}
+
+			respPayload, err := json.Marshal(blockRangeResp)
+			if err != nil {
+				logger.L.WithError(err).Error("handleConnection: Failed to marshal block range response")
+				continue
+			}
+
+			respMsg := Message{
+				Type:    MessageTypeBlockRangeResponse,
+				Payload: respPayload,
+			}
+
+			respData, err := json.Marshal(respMsg)
+			if err != nil {
+				logger.L.WithError(err).Error("handleConnection: Failed to marshal range response message")
+				continue
+			}
+
+			// Send single response with all blocks
+			_, err = conn.Write(respData)
+			if err != nil {
+				logger.L.WithFields(logger.Fields{
+					"startIndex": blockRangeReq.StartIndex,
+					"endIndex":   blockRangeReq.EndIndex,
+					"error":      err,
+				}).Error("handleConnection: Failed to send block range response")
+				continue
+			}
+
+			foundCount := 0
+			for _, b := range blocks {
+				if b != nil {
+					foundCount++
+				}
+			}
+
+			logger.L.WithFields(logger.Fields{
+				"startIndex": blockRangeReq.StartIndex,
+				"endIndex":   blockRangeReq.EndIndex,
+				"totalBlocks": len(blocks),
+				"foundBlocks": foundCount,
+			}).Info("handleConnection: Sent block range response")
+
+		case MessageTypeBlockRangeResponse:
+			logger.L.Debug("handleConnection: Processing block range response message")
+
+			var blockRangeResp BlockRangeResponseMessage
+			if err := json.Unmarshal(msg.Payload, &blockRangeResp); err != nil {
+				logger.L.WithError(err).Error("handleConnection: Failed to unmarshal block range response")
+				continue
+			}
+
+			logger.L.WithFields(logger.Fields{
+				"startIndex":   blockRangeResp.StartIndex,
+				"endIndex":     blockRangeResp.EndIndex,
+				"blocksCount":  len(blockRangeResp.Blocks),
+			}).Info("handleConnection: Received block range response")
+
+			// Process each block in the range response
+			successfullyQueued := 0
+			for i, block := range blockRangeResp.Blocks {
+				expectedIndex := blockRangeResp.StartIndex + uint64(i)
+				
+				if block != nil {
+					if block.Index != expectedIndex {
+						logger.L.WithFields(logger.Fields{
+							"expectedIndex": expectedIndex,
+							"actualIndex":   block.Index,
+							"blockHash":     block.Hash,
+						}).Warn("handleConnection: Block index mismatch in range response")
+						continue
+					}
+
+					// Add block to incoming channel for processing
+					select {
+					case node.incomingBlocks <- block:
+						successfullyQueued++
+						logger.L.WithFields(logger.Fields{
+							"blockIndex": block.Index,
+							"blockHash":  block.Hash,
+						}).Debug("handleConnection: Queued block from range response for processing")
+					default:
+						logger.L.WithFields(logger.Fields{
+							"blockIndex": block.Index,
+							"blockHash":  block.Hash,
+						}).Warn("handleConnection: Incoming block channel full, dropped block from range response")
+					}
+				} else {
+					logger.L.WithField("blockIndex", expectedIndex).Debug("handleConnection: Received null block in range response (block not found)")
+				}
+			}
+
+			logger.L.WithFields(logger.Fields{
+				"startIndex":        blockRangeResp.StartIndex,
+				"endIndex":          blockRangeResp.EndIndex,
+				"totalBlocks":       len(blockRangeResp.Blocks),
+				"successfullyQueued": successfullyQueued,
+			}).Info("handleConnection: Processed block range response")
 
 		default:
 			logger.L.WithField("messageType", msg.Type).Warn("handleConnection: Received unknown message type")

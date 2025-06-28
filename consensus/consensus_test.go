@@ -29,10 +29,25 @@ type MockValidatorSelection struct {
 // MockBroadcaster mocks the network.Broadcaster interface for testing
 type MockBroadcaster struct {
 	broadcastedBlocks []*block.Block
+	blockRequests     []uint64
+	rangeRequests     []struct{ start, end uint64 }
+	peers             map[string]string
 }
 
 func (m *MockBroadcaster) BroadcastBlock(b *block.Block) {
 	m.broadcastedBlocks = append(m.broadcastedBlocks, b)
+}
+
+func (m *MockBroadcaster) SendBlockRequest(blockIndex uint64) {
+	m.blockRequests = append(m.blockRequests, blockIndex)
+}
+
+func (m *MockBroadcaster) SendBlockRangeRequest(startIndex, endIndex uint64) {
+	m.rangeRequests = append(m.rangeRequests, struct{ start, end uint64 }{startIndex, endIndex})
+}
+
+func (m *MockBroadcaster) GetPeers() map[string]string {
+	return m.peers
 }
 
 // NewMockTimeSync creates a new mock time sync for testing
@@ -58,6 +73,9 @@ func NewMockValidatorSelection() *MockValidatorSelection {
 func NewMockBroadcaster() *MockBroadcaster {
 	return &MockBroadcaster{
 		broadcastedBlocks: make([]*block.Block, 0),
+		blockRequests:     make([]uint64, 0),
+		rangeRequests:     make([]struct{ start, end uint64 }, 0),
+		peers:             make(map[string]string),
 	}
 }
 
@@ -520,4 +538,263 @@ func TestConsensusEngine_ProcessPendingBlocks(t *testing.T) {
 	if block2 != nil {
 		assert.Equal(t, futureBlock.Hash, block2.Hash, "Processed pendingBlock should have correct hash")
 	}
+}
+
+// TestConsensusEngine_RequestMissingBlocks tests the blockchain gap detection and synchronization
+func TestConsensusEngine_RequestMissingBlocks(t *testing.T) {
+	// Create a new blockchain
+	bc := block.NewBlockchain("./test_data")
+
+	// Create genesis block
+	genesisBlock := &block.Block{
+		Index:              0,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           block.PrevHashOfGenesis,
+		Data:               "Genesis Block",
+		ValidatorAddress:   "genesis",
+		ValidatorPublicKey: []byte("genesis-pubkey"),
+		Signature:          []byte{},
+	}
+	genesisBlock.StoreHash()
+	err := bc.AddBlock(genesisBlock)
+	require.NoError(t, err)
+
+	// Create mock services
+	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
+	mockBroadcaster := NewMockBroadcaster()
+	
+	// Add some peers to the mock broadcaster
+	mockBroadcaster.peers["peer1"] = "192.168.1.10:18790"
+	mockBroadcaster.peers["peer2"] = "192.168.1.11:18790"
+
+	// Create consensus engine
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+
+	// Create a future block that would create a gap (block index 5 when we only have 0)
+	futureBlock := &block.Block{
+		Index:              5,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           "missing-block-4-hash",
+		Data:               "Future Block",
+		ValidatorAddress:   "test-validator",
+		ValidatorPublicKey: []byte("test-pubkey"),
+		Signature:          []byte{}, // Will be set after hash calculation
+	}
+	futureBlock.StoreHash()
+	// Create proper signature that matches the expected format
+	futureBlock.Signature = []byte(fmt.Sprintf("signed-%s-by-test-validator", futureBlock.Hash))
+
+	// Test gap detection and sync request
+	err = ce.ReceiveBlock(futureBlock)
+	assert.NoError(t, err, "ReceiveBlock should not return error for future block")
+
+	// Give some time for the goroutine to execute
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify that block range request was sent
+	assert.Len(t, mockBroadcaster.rangeRequests, 1, "Should send one range request")
+	if len(mockBroadcaster.rangeRequests) > 0 {
+		rangeReq := mockBroadcaster.rangeRequests[0]
+		assert.Equal(t, uint64(1), rangeReq.start, "Range request should start from block 1")
+		assert.Equal(t, uint64(5), rangeReq.end, "Range request should end before block 5")
+	}
+
+	// Verify that the future block is stored in pending blocks
+	assert.Len(t, ce.pendingBlocks, 1, "Future block should be stored in pending blocks")
+	assert.Contains(t, ce.pendingBlocks, futureBlock.Hash, "Future block should be stored with its hash as key")
+}
+
+// TestConsensusEngine_RequestMissingBlocks_NoPeers tests synchronization when no peers are available
+func TestConsensusEngine_RequestMissingBlocks_NoPeers(t *testing.T) {
+	// Create a new blockchain
+	bc := block.NewBlockchain("./test_data")
+
+	// Create genesis block
+	genesisBlock := &block.Block{
+		Index:              0,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           block.PrevHashOfGenesis,
+		Data:               "Genesis Block",
+		ValidatorAddress:   "genesis",
+		ValidatorPublicKey: []byte("genesis-pubkey"),
+		Signature:          []byte{},
+	}
+	genesisBlock.StoreHash()
+	err := bc.AddBlock(genesisBlock)
+	require.NoError(t, err)
+
+	// Create mock services
+	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
+	mockBroadcaster := NewMockBroadcaster()
+	// Note: No peers added to mockBroadcaster
+
+	// Create consensus engine
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+
+	// Create a future block that would create a gap
+	futureBlock := &block.Block{
+		Index:              3,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           "missing-block-2-hash",
+		Data:               "Future Block",
+		ValidatorAddress:   "test-validator",
+		ValidatorPublicKey: []byte("test-pubkey"),
+		Signature:          []byte{}, // Will be set after hash calculation
+	}
+	futureBlock.StoreHash()
+	// Create proper signature that matches the expected format
+	futureBlock.Signature = []byte(fmt.Sprintf("signed-%s-by-test-validator", futureBlock.Hash))
+
+	// Test gap detection when no peers available
+	err = ce.ReceiveBlock(futureBlock)
+	assert.NoError(t, err, "ReceiveBlock should not return error even when no peers")
+
+	// Give some time for the goroutine to execute
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify that no range request was sent due to no peers
+	assert.Len(t, mockBroadcaster.rangeRequests, 0, "Should not send range request when no peers available")
+
+	// Verify that the future block is still stored in pending blocks
+	assert.Len(t, ce.pendingBlocks, 1, "Future block should still be stored in pending blocks")
+}
+
+// TestConsensusEngine_RequestBlockRangeViaNetworkBroadcaster tests the range request function
+func TestConsensusEngine_RequestBlockRangeViaNetworkBroadcaster(t *testing.T) {
+	// Create a new blockchain
+	bc := block.NewBlockchain("./test_data")
+
+	// Create genesis block
+	genesisBlock := &block.Block{
+		Index:              0,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           block.PrevHashOfGenesis,
+		Data:               "Genesis Block",
+		ValidatorAddress:   "genesis",
+		ValidatorPublicKey: []byte("genesis-pubkey"),
+		Signature:          []byte{},
+	}
+	genesisBlock.StoreHash()
+	err := bc.AddBlock(genesisBlock)
+	require.NoError(t, err)
+
+	// Create mock services
+	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
+	mockBroadcaster := NewMockBroadcaster()
+
+	// Create consensus engine
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+
+	// Test block range request
+	startIndex := uint64(1)
+	endIndex := uint64(5)
+	
+	ce.requestBlockRangeViaNetworkBroadcaster(startIndex, endIndex)
+
+	// Verify that range request was sent
+	assert.Len(t, mockBroadcaster.rangeRequests, 1, "Should send one range request")
+	if len(mockBroadcaster.rangeRequests) > 0 {
+		rangeReq := mockBroadcaster.rangeRequests[0]
+		assert.Equal(t, startIndex, rangeReq.start, "Range request should have correct start index")
+		assert.Equal(t, endIndex, rangeReq.end, "Range request should have correct end index")
+	}
+}
+
+// TestConsensusEngine_GapDetectionInReceiveBlock tests gap detection logic
+func TestConsensusEngine_GapDetectionInReceiveBlock(t *testing.T) {
+	// Create a new blockchain
+	bc := block.NewBlockchain("./test_data")
+
+	// Create genesis block
+	genesisBlock := &block.Block{
+		Index:              0,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           block.PrevHashOfGenesis,
+		Data:               "Genesis Block",
+		ValidatorAddress:   "genesis",
+		ValidatorPublicKey: []byte("genesis-pubkey"),
+		Signature:          []byte{},
+	}
+	genesisBlock.StoreHash()
+	err := bc.AddBlock(genesisBlock)
+	require.NoError(t, err)
+
+	// Create block 1
+	block1 := &block.Block{
+		Index:              1,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           genesisBlock.Hash,
+		Data:               "Block 1",
+		ValidatorAddress:   "test-validator",
+		ValidatorPublicKey: []byte("test-pubkey"),
+		Signature:          []byte{}, // Will be set after hash calculation
+	}
+	block1.StoreHash()
+	// Create proper signature that matches the expected format
+	block1.Signature = []byte(fmt.Sprintf("signed-%s-by-test-validator", block1.Hash))
+	err = bc.AddBlock(block1)
+	require.NoError(t, err)
+
+	// Create mock services
+	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
+	mockBroadcaster := NewMockBroadcaster()
+	mockBroadcaster.peers["peer1"] = "192.168.1.10:18790"
+
+	// Create consensus engine
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+
+	// Test 1: Valid next block (should not trigger sync)
+	block2 := &block.Block{
+		Index:              2,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           block1.Hash,
+		Data:               "Block 2",
+		ValidatorAddress:   "test-validator",
+		ValidatorPublicKey: []byte("test-pubkey"),
+		Signature:          []byte{}, // Will be set after hash calculation
+	}
+	block2.StoreHash()
+	// Create proper signature that matches the expected format
+	block2.Signature = []byte(fmt.Sprintf("signed-%s-by-test-validator", block2.Hash))
+
+	err = ce.ReceiveBlock(block2)
+	assert.NoError(t, err, "Valid next block should be processed without error")
+	
+	// Should not trigger sync for valid block
+	assert.Len(t, mockBroadcaster.rangeRequests, 0, "Valid block should not trigger sync")
+
+	// Test 2: Gap block (should trigger sync)
+	gapBlock := &block.Block{
+		Index:              5, // Gap: missing blocks 3 and 4
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           "missing-block-4-hash",
+		Data:               "Gap Block",
+		ValidatorAddress:   "test-validator",
+		ValidatorPublicKey: []byte("test-pubkey"),
+		Signature:          []byte{}, // Will be set after hash calculation
+	}
+	gapBlock.StoreHash()
+	// Create proper signature that matches the expected format
+	gapBlock.Signature = []byte(fmt.Sprintf("signed-%s-by-test-validator", gapBlock.Hash))
+
+	err = ce.ReceiveBlock(gapBlock)
+	assert.NoError(t, err, "Gap block should be received without error")
+
+	// Give time for goroutine to execute
+	time.Sleep(100 * time.Millisecond)
+
+	// Should trigger sync for gap block
+	assert.Len(t, mockBroadcaster.rangeRequests, 1, "Gap block should trigger sync")
+	if len(mockBroadcaster.rangeRequests) > 0 {
+		rangeReq := mockBroadcaster.rangeRequests[0]
+		assert.Equal(t, uint64(3), rangeReq.start, "Sync should request missing blocks starting from 3")
+		assert.Equal(t, uint64(5), rangeReq.end, "Sync should request missing blocks up to (but not including) 5")
+	}
+
+	// Gap block should be in pending blocks
+	assert.Contains(t, ce.pendingBlocks, gapBlock.Hash, "Gap block should be stored in pending blocks")
 }
