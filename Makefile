@@ -3,7 +3,7 @@
 # Run the main blockchain application
 .PHONY: run
 run:
-	go run main.go
+	go run main.go $(if $(ARGS),$(ARGS),)
 
 # Run all tests
 .PHONY: test
