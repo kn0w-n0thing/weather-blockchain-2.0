@@ -12,6 +12,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+var log = logger.Logger
+
 // Server represents the API server
 type Server struct {
 	port       string
@@ -29,7 +31,7 @@ type APIResponse struct {
 
 // NewServer creates a new API server instance
 func NewServer(port string) *Server {
-	logger.L.WithField("port", port).Info("Creating new blockchain API server")
+	log.WithField("port", port).Info("Creating new blockchain API server")
 
 	nodeClient := NewNodeClient()
 
@@ -41,12 +43,12 @@ func NewServer(port string) *Server {
 
 // Start starts the API server
 func (s *Server) Start() error {
-	logger.L.WithField("port", s.port).Info("Starting blockchain API server")
+	log.WithField("port", s.port).Info("Starting blockchain API server")
 
 	// Discover nodes on startup
 	err := s.nodeClient.DiscoverNodes()
 	if err != nil {
-		logger.L.WithError(err).Warn("Initial node discovery failed, but server will start anyway")
+		log.WithError(err).Warn("Initial node discovery failed, but server will start anyway")
 	}
 
 	mux := http.NewServeMux()
@@ -67,13 +69,13 @@ func (s *Server) Start() error {
 		Handler: s.corsMiddleware(s.loggingMiddleware(mux)),
 	}
 
-	logger.L.WithField("port", s.port).Info("Blockchain API server started successfully")
+	log.WithField("port", s.port).Info("Blockchain API server started successfully")
 	return s.httpServer.ListenAndServe()
 }
 
 // Stop stops the API server
 func (s *Server) Stop() error {
-	logger.L.Info("Stopping blockchain API server")
+	log.Info("Stopping blockchain API server")
 	if s.httpServer != nil {
 		return s.httpServer.Close()
 	}
@@ -103,7 +105,7 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 		duration := time.Since(start)
 
-		logger.L.WithFields(logrus.Fields{
+		log.WithFields(logrus.Fields{
 			"method":   r.Method,
 			"url":      r.URL.Path,
 			"duration": duration.String(),
@@ -118,7 +120,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, statusCode int, data interface
 	w.WriteHeader(statusCode)
 
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		logger.L.WithError(err).Error("Failed to encode JSON response")
+		log.WithError(err).Error("Failed to encode JSON response")
 	}
 }
 
@@ -199,11 +201,11 @@ func (s *Server) handleDiscoverNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	logger.L.Info("Manual node discovery triggered via API")
+	log.Info("Manual node discovery triggered via API")
 
 	err := s.nodeClient.DiscoverNodes()
 	if err != nil {
-		logger.L.WithError(err).Error("Node discovery failed")
+		log.WithError(err).Error("Node discovery failed")
 		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Node discovery failed: %v", err))
 		return
 	}
@@ -233,7 +235,7 @@ func (s *Server) handleBlockchainInfo(w http.ResponseWriter, r *http.Request) {
 	for _, node := range nodes {
 		info, err := s.nodeClient.RequestBlockchainInfo(node.NodeID)
 		if err != nil {
-			logger.L.WithFields(logrus.Fields{
+			log.WithFields(logrus.Fields{
 				"nodeID": node.NodeID,
 				"error":  err,
 			}).Warn("Failed to get blockchain info from node")
@@ -386,7 +388,7 @@ func (s *Server) handleCompareNodes(w http.ResponseWriter, r *http.Request) {
 
 // handleBlockchainHeight gets the height of the blockchain from discovered nodes
 func (s *Server) handleBlockchainHeight(w http.ResponseWriter, r *http.Request) {
-	logger.L.Debug("API: Handling blockchain height request")
+	log.Debug("API: Handling blockchain height request")
 
 	if r.Method != http.MethodGet {
 		s.writeError(w, http.StatusMethodNotAllowed, "Only GET method is allowed")
@@ -407,14 +409,14 @@ func (s *Server) handleBlockchainHeight(w http.ResponseWriter, r *http.Request) 
 
 	// Get blockchain info from each node to determine height
 	for _, node := range nodes {
-		logger.L.WithFields(logrus.Fields{
+		log.WithFields(logrus.Fields{
 			"nodeID":  node.NodeID,
 			"address": node.Address,
 		}).Debug("Getting blockchain height from node")
 
 		info, err := s.nodeClient.RequestBlockchainInfo(node.Address)
 		if err != nil {
-			logger.L.WithError(err).WithField("nodeID", node.NodeID).Warn("Failed to get blockchain info from node")
+			log.WithError(err).WithField("nodeID", node.NodeID).Warn("Failed to get blockchain info from node")
 			nodeHeights[node.NodeID] = map[string]interface{}{
 				"height": nil,
 				"error":  err.Error(),
@@ -463,7 +465,7 @@ func (s *Server) handleBlockchainHeight(w http.ResponseWriter, r *http.Request) 
 
 // handleLatestBlocks gets the n latest blocks from the blockchain
 func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
-	logger.L.Debug("API: Handling latest blocks request")
+	log.Debug("API: Handling latest blocks request")
 
 	if r.Method != http.MethodGet {
 		s.writeError(w, http.StatusMethodNotAllowed, "Only GET method is allowed")
@@ -506,7 +508,7 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		logger.L.WithFields(logrus.Fields{
+		log.WithFields(logrus.Fields{
 			"nodeID":  node.NodeID,
 			"address": node.Address,
 			"blocks":  n,
@@ -515,7 +517,7 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 		// First get blockchain info to determine the latest block index
 		info, err := s.nodeClient.RequestBlockchainInfo(node.Address)
 		if err != nil {
-			logger.L.WithError(err).WithField("nodeID", node.NodeID).Warn("Failed to get blockchain info from node")
+			log.WithError(err).WithField("nodeID", node.NodeID).Warn("Failed to get blockchain info from node")
 			nodeResults[node.NodeID] = map[string]interface{}{
 				"blocks": nil,
 				"error":  err.Error(),
@@ -547,7 +549,7 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 		for i := startIndex; i <= latestIndex; i++ {
 			block, err := s.nodeClient.RequestBlock(node.Address, i)
 			if err != nil {
-				logger.L.WithError(err).WithFields(logrus.Fields{
+				log.WithError(err).WithFields(logrus.Fields{
 					"nodeID":     node.NodeID,
 					"blockIndex": i,
 				}).Warn("Failed to get block from node")

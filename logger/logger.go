@@ -57,12 +57,12 @@ func (f *Log4jFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	return []byte(logLine + "\n"), nil
 }
 
-// L is an alias for the global logger instance
-var L = logrus.New()
+// Logger is an alias for the global logger instance
+var Logger = logrus.New()
 
 func init() {
 	// Enable caller reporting for file/line info
-	L.SetReportCaller(true)
+	Logger.SetReportCaller(true)
 
 	// File rotation setup
 	fileWriter := &lumberjack.Logger{
@@ -74,11 +74,11 @@ func init() {
 	}
 
 	// Set output to both console and rotating file
-	L.Out = io.MultiWriter(os.Stdout, fileWriter)
+	Logger.Out = io.MultiWriter(os.Stdout, fileWriter)
 
 	// Use custom log4j-like formatter
-	L.SetFormatter(&Log4jFormatter{})
+	Logger.SetFormatter(&Log4jFormatter{})
 
-	L.SetLevel(logrus.DebugLevel)
-	L.Info("Logger initialized successfully")
+	Logger.SetLevel(logrus.DebugLevel)
+	Logger.Info("Logger initialized successfully")
 }

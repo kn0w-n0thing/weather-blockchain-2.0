@@ -3,15 +3,13 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/hashicorp/mdns"
+	"github.com/sirupsen/logrus"
 	"net"
 	"strconv"
 	"sync"
 	"time"
 	"weather-blockchain/block"
-	"weather-blockchain/logger"
-
-	"github.com/hashicorp/mdns"
-	"github.com/sirupsen/logrus"
 )
 
 // NodeClient handles communication with blockchain nodes
@@ -55,7 +53,7 @@ type BlockchainRequestMessage struct {
 
 // NewNodeClient creates a new node client for API communication
 func NewNodeClient() *NodeClient {
-	logger.L.Info("Creating new blockchain node client for API")
+	log.Info("Creating new blockchain node client for API")
 
 	return &NodeClient{
 		discoveredNodes: make(map[string]NodeInfo),
@@ -66,7 +64,7 @@ func NewNodeClient() *NodeClient {
 
 // DiscoverNodes discovers blockchain nodes on the network
 func (nc *NodeClient) DiscoverNodes() error {
-	logger.L.Info("Starting blockchain node discovery")
+	log.Info("Starting blockchain node discovery")
 
 	entriesCh := make(chan *mdns.ServiceEntry, 4)
 	defer close(entriesCh)
@@ -86,7 +84,7 @@ func (nc *NodeClient) DiscoverNodes() error {
 		Entries: entriesCh,
 	}
 
-	logger.L.WithFields(logrus.Fields{
+	log.WithFields(logrus.Fields{
 		"service": nc.serviceName,
 		"domain":  nc.domain,
 		"timeout": params.Timeout,
@@ -94,7 +92,7 @@ func (nc *NodeClient) DiscoverNodes() error {
 
 	err := mdns.Query(params)
 	if err != nil {
-		logger.L.WithError(err).Error("Failed to query for blockchain nodes")
+		log.WithError(err).Error("Failed to query for blockchain nodes")
 		return fmt.Errorf("failed to discover nodes: %w", err)
 	}
 
@@ -105,13 +103,13 @@ func (nc *NodeClient) DiscoverNodes() error {
 	nodeCount := len(nc.discoveredNodes)
 	nc.mutex.RUnlock()
 
-	logger.L.WithField("discoveredNodes", nodeCount).Info("Node discovery completed")
+	log.WithField("discoveredNodes", nodeCount).Info("Node discovery completed")
 	return nil
 }
 
 // processDiscoveredNode processes a discovered node entry
 func (nc *NodeClient) processDiscoveredNode(entry *mdns.ServiceEntry) {
-	logger.L.WithFields(logrus.Fields{
+	log.WithFields(logrus.Fields{
 		"name": entry.Name,
 		"host": entry.Host,
 		"port": entry.Port,
@@ -128,7 +126,7 @@ func (nc *NodeClient) processDiscoveredNode(entry *mdns.ServiceEntry) {
 	}
 
 	if nodeID == "" {
-		logger.L.WithField("name", entry.Name).Warn("No node ID found in TXT records")
+		log.WithField("name", entry.Name).Warn("No node ID found in TXT records")
 		return
 	}
 
@@ -139,7 +137,7 @@ func (nc *NodeClient) processDiscoveredNode(entry *mdns.ServiceEntry) {
 	} else if entry.AddrV6 != nil {
 		nodeIP = entry.AddrV6
 	} else {
-		logger.L.WithField("nodeID", nodeID).Warn("No IP address found for node")
+		log.WithField("nodeID", nodeID).Warn("No IP address found for node")
 		return
 	}
 
@@ -155,7 +153,7 @@ func (nc *NodeClient) processDiscoveredNode(entry *mdns.ServiceEntry) {
 	nc.discoveredNodes[nodeID] = nodeInfo
 	nc.mutex.Unlock()
 
-	logger.L.WithFields(logrus.Fields{
+	log.WithFields(logrus.Fields{
 		"nodeID":  nodeID,
 		"address": nodeInfo.Address,
 		"port":    nodeInfo.Port,
@@ -172,7 +170,7 @@ func (nc *NodeClient) GetDiscoveredNodes() []NodeInfo {
 		nodes = append(nodes, node)
 	}
 
-	logger.L.WithField("nodeCount", len(nodes)).Debug("Retrieved discovered nodes list")
+	log.WithField("nodeCount", len(nodes)).Debug("Retrieved discovered nodes list")
 	return nodes
 }
 
@@ -186,7 +184,7 @@ func (nc *NodeClient) RequestBlockchainInfo(nodeID string) (*BlockchainInfo, err
 		return nil, fmt.Errorf("node %s not found", nodeID)
 	}
 
-	logger.L.WithFields(logrus.Fields{
+	log.WithFields(logrus.Fields{
 		"nodeID":  nodeID,
 		"address": nodeInfo.Address,
 		"port":    nodeInfo.Port,
@@ -196,7 +194,7 @@ func (nc *NodeClient) RequestBlockchainInfo(nodeID string) (*BlockchainInfo, err
 	address := net.JoinHostPort(nodeInfo.Address, nodeInfo.Port)
 	conn, err := net.DialTimeout("tcp", address, 5*time.Second)
 	if err != nil {
-		logger.L.WithFields(logrus.Fields{
+		log.WithFields(logrus.Fields{
 			"nodeID":  nodeID,
 			"address": address,
 			"error":   err,
@@ -273,10 +271,10 @@ func (nc *NodeClient) RequestBlockchainInfo(nodeID string) (*BlockchainInfo, err
 		nc.mutex.Unlock()
 	}
 
-	logger.L.WithFields(logrus.Fields{
-		"nodeID":       nodeID,
-		"blockHeight":  info.TotalBlocks,
-		"latestHash":   info.LatestHash,
+	log.WithFields(logrus.Fields{
+		"nodeID":      nodeID,
+		"blockHeight": info.TotalBlocks,
+		"latestHash":  info.LatestHash,
 	}).Info("Successfully retrieved blockchain info from node")
 
 	return info, nil
@@ -292,7 +290,7 @@ func (nc *NodeClient) RequestBlock(nodeID string, blockIndex uint64) (*block.Blo
 		return nil, fmt.Errorf("node %s not found", nodeID)
 	}
 
-	logger.L.WithFields(logrus.Fields{
+	log.WithFields(logrus.Fields{
 		"nodeID":     nodeID,
 		"blockIndex": blockIndex,
 	}).Debug("Requesting specific block from node")
@@ -351,7 +349,7 @@ func (nc *NodeClient) RequestBlock(nodeID string, blockIndex uint64) (*block.Blo
 		return nil, fmt.Errorf("failed to unmarshal block response: %w", err)
 	}
 
-	logger.L.WithFields(logrus.Fields{
+	log.WithFields(logrus.Fields{
 		"nodeID":     nodeID,
 		"blockIndex": blockIndex,
 		"found":      blockResp.Block != nil,

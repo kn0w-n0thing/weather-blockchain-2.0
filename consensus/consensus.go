@@ -10,6 +10,8 @@ import (
 	"weather-blockchain/network"
 )
 
+var log = logger.Logger
+
 // TimeSync defines the interface needed for time synchronization
 type TimeSync interface {
 	GetNetworkTime() time.Time
@@ -43,7 +45,7 @@ type Engine struct {
 func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validatorSelection ValidatorSelection,
 	networkBroadcaster network.Broadcaster, validatorID string, pubKey []byte, private []byte) *Engine {
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"validatorID": validatorID,
 		"pubKeySize":  len(pubKey),
 	}).Debug("Creating new consensus engine")
@@ -60,40 +62,40 @@ func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validat
 		forks:               make(map[uint64][]*block.Block),
 	}
 
-	logger.L.WithField("validatorID", validatorID).Info("Consensus engine created")
+	log.WithField("validatorID", validatorID).Info("Consensus engine created")
 	return engine
 }
 
 // Start begins the consensus process
 func (ce *Engine) Start() error {
-	logger.L.WithField("validatorID", ce.validatorID).Debug("Starting consensus engine")
+	log.WithField("validatorID", ce.validatorID).Debug("Starting consensus engine")
 
 	// Start listening for time slots
-	logger.L.Debug("Launching time slot monitoring goroutine")
+	log.Debug("Launching time slot monitoring goroutine")
 	go ce.monitorSlots()
 
 	// Start processing pending blocks
-	logger.L.Debug("Launching pending block processor goroutine")
+	log.Debug("Launching pending block processor goroutine")
 	go ce.processPendingBlocks()
 
-	logger.L.WithField("validatorID", ce.validatorID).Info("Consensus engine started")
+	log.WithField("validatorID", ce.validatorID).Info("Consensus engine started")
 	return nil
 }
 
 // monitorSlots watches for new time slots and creates blocks when selected as validator
 func (ce *Engine) monitorSlots() {
-	logger.L.WithField("validatorID", ce.validatorID).Debug("Starting slot monitoring process")
+	log.WithField("validatorID", ce.validatorID).Debug("Starting slot monitoring process")
 
 	for {
 		// If we're selected as validator for current slot
 		currentSlot := ce.timeSync.GetCurrentSlot()
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"currentSlot": currentSlot,
 			"validatorID": ce.validatorID,
 		}).Debug("Checking if node is validator for current slot")
 
 		if ce.validatorSelection.IsLocalNodeValidatorForCurrentSlot() {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"validatorID": ce.validatorID,
 				"currentSlot": currentSlot,
 			}).Info("Node selected as validator for current slot")
@@ -107,7 +109,7 @@ func (ce *Engine) monitorSlots() {
 			now := ce.timeSync.GetNetworkTime()
 			if now.Before(slotMidpoint) {
 				waitTime := slotMidpoint.Sub(now)
-				logger.L.WithFields(logger.Fields{
+				log.WithFields(logger.Fields{
 					"currentTime": now,
 					"midpoint":    slotMidpoint,
 					"waitTime":    waitTime,
@@ -116,13 +118,13 @@ func (ce *Engine) monitorSlots() {
 			}
 
 			// Create new block
-			logger.L.WithField("currentSlot", currentSlot).Info("Creating new block as validator")
+			log.WithField("currentSlot", currentSlot).Info("Creating new block as validator")
 			ce.createNewBlock(fmt.Sprintf("Message for slot %d", currentSlot))
 		}
 
 		// Calculate time to next slot
 		timeToNext := ce.timeSync.GetTimeToNextSlot()
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"currentSlot": currentSlot,
 			"timeToNext":  timeToNext,
 		}).Debug("Waiting for next slot")
@@ -132,7 +134,7 @@ func (ce *Engine) monitorSlots() {
 
 // createNewBlock creates a new block as a validator
 func (ce *Engine) createNewBlock(message string) {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"validatorID": ce.validatorID,
 		"message":     message,
 	}).Debug("Creating new block as validator")
@@ -143,23 +145,23 @@ func (ce *Engine) createNewBlock(message string) {
 	// Get latest block
 	latestBlock := ce.blockchain.GetLatestBlock()
 	if latestBlock == nil {
-		logger.L.Error("Cannot create new block: no genesis block found in blockchain")
-		logger.L.Error("Please run the client with --genesis flag to create a genesis block first")
+		log.Error("Cannot create new block: no genesis block found in blockchain")
+		log.Error("Please run the client with --genesis flag to create a genesis block first")
 		return
 	}
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"latestBlockIndex": latestBlock.Index,
 		"latestBlockHash":  latestBlock.Hash,
 	}).Debug("Retrieved latest block for building new block")
 
 	// Current time as Unix timestamp
 	timestamp := ce.timeSync.GetNetworkTime().Unix()
-	logger.L.WithField("timestamp", timestamp).Debug("Using current network time for block")
+	log.WithField("timestamp", timestamp).Debug("Using current network time for block")
 
 	// Create new block
 	newBlockIndex := latestBlock.Index + 1
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"newIndex":  newBlockIndex,
 		"prevHash":  latestBlock.Hash,
 		"validator": ce.validatorID,
@@ -180,22 +182,22 @@ func (ce *Engine) createNewBlock(message string) {
 	}
 
 	// Calculate and store hash first
-	logger.L.Debug("Computing block hash")
+	log.Debug("Computing block hash")
 	newBlock.StoreHash()
 
 	// Sign the block
-	logger.L.Debug("Signing block with validator key")
+	log.Debug("Signing block with validator key")
 	ce.signBlock(newBlock)
 
 	// Add to blockchain
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex": newBlock.Index,
 		"blockHash":  newBlock.Hash,
 	}).Debug("Adding block to blockchain")
 
 	err := ce.blockchain.AddBlockWithAutoSave(newBlock)
 	if err != nil {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex": newBlock.Index,
 			"error":      err.Error(),
 		}).Error("Failed to add new block")
@@ -204,12 +206,12 @@ func (ce *Engine) createNewBlock(message string) {
 
 	// Broadcast block to network immediately after generation
 	ce.networkBroadcaster.BroadcastBlock(newBlock)
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex": newBlock.Index,
 		"blockHash":  newBlock.Hash,
 	}).Info("Block broadcasted to network")
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex": newBlock.Index,
 		"blockHash":  newBlock.Hash,
 		"validator":  ce.validatorID,
@@ -218,7 +220,7 @@ func (ce *Engine) createNewBlock(message string) {
 
 // signBlock signs a block with the validator's private key
 func (ce *Engine) signBlock(b *block.Block) {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex":  b.Index,
 		"blockHash":   b.Hash,
 		"validatorID": ce.validatorID,
@@ -252,7 +254,7 @@ func (ce *Engine) signBlock(b *block.Block) {
 	signatureStr := fmt.Sprintf("signed-%s-by-%s", b.Hash, ce.validatorID)
 	b.Signature = []byte(signatureStr)
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex":    b.Index,
 		"signatureSize": len(b.Signature),
 	}).Debug("Block signing completed")
@@ -260,7 +262,7 @@ func (ce *Engine) signBlock(b *block.Block) {
 
 // ReceiveBlock processes a block received from the network
 func (ce *Engine) ReceiveBlock(block *block.Block) error {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex":    block.Index,
 		"blockHash":     block.Hash,
 		"blockPrevHash": block.PrevHash,
@@ -272,13 +274,13 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 
 	// First verify the block timestamp is valid
 	blockTime := time.Unix(block.Timestamp, 0)
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockTime":   blockTime,
 		"networkTime": ce.timeSync.GetNetworkTime(),
 	}).Debug("Verifying block timestamp")
 
 	if !ce.timeSync.IsTimeValid(blockTime) {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex": block.Index,
 			"blockTime":  blockTime,
 		}).Warn("Block timestamp is outside acceptable range")
@@ -288,7 +290,7 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 	// Check if we already have this block
 	existingBlock := ce.blockchain.GetBlockByHash(block.Hash)
 	if existingBlock != nil {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex": block.Index,
 			"blockHash":  block.Hash,
 		}).Debug("Block already exists in local chain")
@@ -296,9 +298,9 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 	}
 
 	// Verify the block's signature
-	logger.L.WithField("blockIndex", block.Index).Debug("Verifying block signature")
+	log.WithField("blockIndex", block.Index).Debug("Verifying block signature")
 	if !ce.verifyBlockSignature(block) {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex":    block.Index,
 			"blockHash":     block.Hash,
 			"validatorAddr": block.ValidatorAddress,
@@ -307,21 +309,21 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 	}
 
 	// Try to add block with fork resolution
-	logger.L.WithField("blockIndex", block.Index).Debug("Trying to add block with fork resolution")
+	log.WithField("blockIndex", block.Index).Debug("Trying to add block with fork resolution")
 	err := ce.blockchain.TryAddBlockWithForkResolution(block)
 	if err == nil {
 		// Block was successfully added
-		logger.L.WithField("blockIndex", block.Index).Debug("Block added successfully, saving to disk")
+		log.WithField("blockIndex", block.Index).Debug("Block added successfully, saving to disk")
 		err = ce.blockchain.SaveToDisk()
 		if err != nil {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"blockIndex": block.Index,
 				"error":      err.Error(),
 			}).Error("Failed to save blockchain to disk after adding block")
 			return fmt.Errorf("failed to save blockchain: %v", err)
 		}
 
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex": block.Index,
 			"blockHash":  block.Hash,
 			"validator":  block.ValidatorAddress,
@@ -330,7 +332,7 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 	}
 
 	// Block couldn't be added - check if we need to sync missing blocks
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex":        block.Index,
 		"blockHash":         block.Hash,
 		"error":             err.Error(),
@@ -339,7 +341,7 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 
 	// Check if this is a gap issue (missing previous blocks)
 	if err.Error() == "previous block not found" {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex":    block.Index,
 			"blockPrevHash": block.PrevHash,
 		}).Info("Detected blockchain gap, triggering synchronization")
@@ -353,7 +355,7 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 
 // verifyBlockSignature verifies the signature on a block
 func (ce *Engine) verifyBlockSignature(block *block.Block) bool {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex": block.Index,
 		"blockHash":  block.Hash,
 		"validator":  block.ValidatorAddress,
@@ -391,12 +393,12 @@ func (ce *Engine) verifyBlockSignature(block *block.Block) bool {
 	valid := len(signatureStr) > len(expectedPrefix) && signatureStr[:len(expectedPrefix)] == expectedPrefix
 
 	if valid {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex": block.Index,
 			"blockHash":  block.Hash,
 		}).Debug("Block signature verification successful")
 	} else {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex":     block.Index,
 			"blockHash":      block.Hash,
 			"signatureStr":   signatureStr,
@@ -409,7 +411,7 @@ func (ce *Engine) verifyBlockSignature(block *block.Block) bool {
 
 // processPendingBlocks periodically tries to place pending blocks
 func (ce *Engine) processPendingBlocks() {
-	logger.L.WithField("interval", "5s").Debug("Starting pending block processor")
+	log.WithField("interval", "5s").Debug("Starting pending block processor")
 
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -419,9 +421,9 @@ func (ce *Engine) processPendingBlocks() {
 
 		pendingCount := len(ce.pendingBlocks)
 		if pendingCount > 0 {
-			logger.L.WithField("pendingCount", pendingCount).Debug("Processing pending blocks")
+			log.WithField("pendingCount", pendingCount).Debug("Processing pending blocks")
 		} else {
-			logger.L.Debug("No pending blocks to process")
+			log.Debug("No pending blocks to process")
 			continue
 		}
 
@@ -431,7 +433,7 @@ func (ce *Engine) processPendingBlocks() {
 		processed := make([]string, 0)
 
 		for hash, block := range ce.pendingBlocks {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"blockIndex": block.Index,
 				"blockHash":  hash,
 			}).Debug("Attempting to process pending block")
@@ -439,22 +441,22 @@ func (ce *Engine) processPendingBlocks() {
 			err := ce.blockchain.TryAddBlockWithForkResolution(block)
 			if err == nil {
 				// Block was successfully added
-				logger.L.WithField("blockIndex", block.Index).Debug("Pending block added successfully, saving to disk")
+				log.WithField("blockIndex", block.Index).Debug("Pending block added successfully, saving to disk")
 				err = ce.blockchain.SaveToDisk()
 				if err == nil {
 					processed = append(processed, hash)
-					logger.L.WithFields(logger.Fields{
+					log.WithFields(logger.Fields{
 						"blockIndex": block.Index,
 						"blockHash":  hash,
 					}).Info("Successfully processed pending block")
 				} else {
-					logger.L.WithFields(logger.Fields{
+					log.WithFields(logger.Fields{
 						"blockIndex": block.Index,
 						"error":      err.Error(),
 					}).Warn("Failed to save blockchain after adding pending block")
 				}
 			} else {
-				logger.L.WithFields(logger.Fields{
+				log.WithFields(logger.Fields{
 					"blockIndex": block.Index,
 					"error":      err.Error(),
 				}).Debug("Pending block still cannot be placed in blockchain")
@@ -464,13 +466,13 @@ func (ce *Engine) processPendingBlocks() {
 		// Remove processed blocks
 		processedCount := len(processed)
 		if processedCount > 0 {
-			logger.L.WithField("processedCount", processedCount).Debug("Removing processed blocks from pending queue")
+			log.WithField("processedCount", processedCount).Debug("Removing processed blocks from pending queue")
 
 			for _, hash := range processed {
 				delete(ce.pendingBlocks, hash)
 			}
 
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"processedCount": processedCount,
 				"remainingCount": len(ce.pendingBlocks),
 			}).Info("Removed processed blocks from pending queue")
@@ -592,7 +594,7 @@ func (ce *Engine) GetPendingBlockCount() int {
 
 // requestMissingBlocks attempts to synchronize missing blocks when a gap is detected
 func (ce *Engine) requestMissingBlocks(futureBlock *block.Block) {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"futureBlockIndex": futureBlock.Index,
 		"futureBlockHash":  futureBlock.Hash,
 		"prevHash":         futureBlock.PrevHash,
@@ -601,14 +603,14 @@ func (ce *Engine) requestMissingBlocks(futureBlock *block.Block) {
 	// Get current blockchain state
 	latestBlock := ce.blockchain.GetLatestBlock()
 	if latestBlock == nil {
-		logger.L.Error("Cannot sync missing blocks: no genesis block found")
+		log.Error("Cannot sync missing blocks: no genesis block found")
 		return
 	}
 
 	expectedNextIndex := latestBlock.Index + 1
 	gapSize := futureBlock.Index - expectedNextIndex
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"currentLatestIndex": latestBlock.Index,
 		"expectedNextIndex":  expectedNextIndex,
 		"futureBlockIndex":   futureBlock.Index,
@@ -618,18 +620,18 @@ func (ce *Engine) requestMissingBlocks(futureBlock *block.Block) {
 	// Get available peers from the network broadcaster (Node)
 	peerGetter, ok := ce.networkBroadcaster.(interface{ GetPeers() map[string]string })
 	if !ok {
-		logger.L.Error("Network broadcaster doesn't support peer access")
+		log.Error("Network broadcaster doesn't support peer access")
 		return
 	}
 
 	peers := peerGetter.GetPeers()
 	if len(peers) == 0 {
-		logger.L.Warn("No peers available for block synchronization")
+		log.Warn("No peers available for block synchronization")
 		return
 	}
 
 	// Request missing blocks range from peers using existing network broadcaster
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"startIndex": expectedNextIndex,
 		"endIndex":   futureBlock.Index,
 	}).Info("Requesting missing block range via network broadcaster")
@@ -639,7 +641,7 @@ func (ce *Engine) requestMissingBlocks(futureBlock *block.Block) {
 
 // requestBlockRangeViaNetworkBroadcaster requests a range of blocks using the network broadcaster interface
 func (ce *Engine) requestBlockRangeViaNetworkBroadcaster(startIndex, endIndex uint64) {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"startIndex": startIndex,
 		"endIndex":   endIndex,
 		"blockCount": endIndex - startIndex,
@@ -647,7 +649,7 @@ func (ce *Engine) requestBlockRangeViaNetworkBroadcaster(startIndex, endIndex ui
 
 	// Use the network broadcaster's SendBlockRangeRequest method
 	ce.networkBroadcaster.SendBlockRangeRequest(startIndex, endIndex)
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"startIndex": startIndex,
 		"endIndex":   endIndex,
 	}).Info("Block range request sent via network broadcaster")

@@ -31,10 +31,9 @@ type ValidatorSelection struct {
 	currentEpoch  *Epoch
 	nextEpoch     *Epoch
 	slotsPerEpoch uint64
-	running  bool
-	stopChan chan struct{}
+	running       bool
+	stopChan      chan struct{}
 }
-
 
 // String returns a string representation of the Epoch struct
 func (epoch *Epoch) String() string {
@@ -57,7 +56,7 @@ func (vs *ValidatorSelection) String() string {
 
 // NewValidatorSelection creates a new validator selection service
 func NewValidatorSelection(timeSync ITimeSync, node *Node) *ValidatorSelection {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"timeSync": fmt.Sprintf("%T", timeSync),
 		"nodeID":   node.ID,
 	}).Debug("NewValidatorSelection: Creating new validator selection")
@@ -76,10 +75,9 @@ func NewValidatorSelection(timeSync ITimeSync, node *Node) *ValidatorSelection {
 	return vs
 }
 
-
 // buildCurrentEpoch creates a network epoch snapshot for current slot
 func (vs *ValidatorSelection) buildCurrentEpoch() {
-	logger.L.WithField("validator", vs.String()).Debug("buildCurrentEpoch: Creating new epoch")
+	log.WithField("validator", vs.String()).Debug("buildCurrentEpoch: Creating new epoch")
 
 	currentSlot := vs.timeSync.GetCurrentSlot()
 
@@ -88,7 +86,7 @@ func (vs *ValidatorSelection) buildCurrentEpoch() {
 	startSlot := epochNumber * vs.slotsPerEpoch
 	endSlot := startSlot + vs.slotsPerEpoch - 1
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"currentSlot": currentSlot,
 		"epochNumber": epochNumber,
 		"startSlot":   startSlot,
@@ -97,10 +95,10 @@ func (vs *ValidatorSelection) buildCurrentEpoch() {
 
 	// Get current participants (include local node + all peers)
 	var participants []string
-	
+
 	// Always include the local node as a participant
 	participants = append(participants, vs.node.ID)
-	
+
 	// Add all discovered peers (use peer IDs, not addresses)
 	for peerID := range vs.node.Peers {
 		participants = append(participants, peerID)
@@ -110,7 +108,7 @@ func (vs *ValidatorSelection) buildCurrentEpoch() {
 	// This is critical for consensus - all nodes must have the same participant order
 	sort.Strings(participants)
 
-	logger.L.WithField("participantCount", len(participants)).Debug("buildCurrentEpoch: Collected participants")
+	log.WithField("participantCount", len(participants)).Debug("buildCurrentEpoch: Collected participants")
 
 	// Create epoch
 	epoch := &Epoch{
@@ -124,7 +122,7 @@ func (vs *ValidatorSelection) buildCurrentEpoch() {
 
 	vs.currentEpoch = epoch
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"epochNumber":      epochNumber,
 		"startSlot":        startSlot,
 		"endSlot":          endSlot,
@@ -135,7 +133,7 @@ func (vs *ValidatorSelection) buildCurrentEpoch() {
 
 // calculateEpochHash creates a deterministic hash of epoch data
 func calculateEpochHash(epoch *Epoch) string {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"startSlot":    epoch.StartSlot,
 		"endSlot":      epoch.EndSlot,
 		"participants": len(epoch.Participants),
@@ -149,13 +147,13 @@ func calculateEpochHash(epoch *Epoch) string {
 	hash := sha256.Sum256([]byte(data))
 	hashString := hex.EncodeToString(hash[:])
 
-	logger.L.WithField("epochHash", hashString[:8]).Debug("calculateEpochHash: Calculated hash")
+	log.WithField("epochHash", hashString[:8]).Debug("calculateEpochHash: Calculated hash")
 	return hashString
 }
 
 // GetValidatorForSlot returns the validator for a specific slot
 func (vs *ValidatorSelection) GetValidatorForSlot(slot uint64) string {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"slot":      slot,
 		"validator": vs.String(),
 	}).Debug("GetValidatorForSlot: Finding validator for slot")
@@ -166,13 +164,13 @@ func (vs *ValidatorSelection) GetValidatorForSlot(slot uint64) string {
 	// Get epoch for this slot
 	epoch := vs.getEpochForSlot(slot)
 	if epoch == nil || len(epoch.Participants) == 0 {
-		logger.L.Debug("GetValidatorForSlot: No valid epoch or participants found")
+		log.Debug("GetValidatorForSlot: No valid epoch or participants found")
 		return ""
 	}
 
 	// Use the epoch's participant list for selection
 	participants := epoch.Participants
-	logger.L.WithField("participantCount", len(participants)).Debug("GetValidatorForSlot: Using participants from epoch")
+	log.WithField("participantCount", len(participants)).Debug("GetValidatorForSlot: Using participants from epoch")
 
 	// Create deterministic hash based on slot number
 	slotBytes := make([]byte, 8)
@@ -186,7 +184,7 @@ func (vs *ValidatorSelection) GetValidatorForSlot(slot uint64) string {
 	selectedIndex := randomValue % uint64(len(participants))
 	selectedValidator := participants[selectedIndex]
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"slot":              slot,
 		"selectedIndex":     selectedIndex,
 		"selectedValidator": selectedValidator,
@@ -197,21 +195,21 @@ func (vs *ValidatorSelection) GetValidatorForSlot(slot uint64) string {
 
 // updateEpochIfNeeded checks if we need to build a new epoch
 func (vs *ValidatorSelection) updateEpochIfNeeded(slot uint64) {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"slot":      slot,
 		"validator": vs.String(),
 	}).Debug("updateEpochIfNeeded: Checking if epoch update is needed")
 
 	// If we don't have a current epoch yet, build one
 	if vs.currentEpoch == nil {
-		logger.L.Debug("updateEpochIfNeeded: No current epoch, building new one")
+		log.Debug("updateEpochIfNeeded: No current epoch, building new one")
 		vs.buildCurrentEpoch()
 		return
 	}
 
 	// If the slot is beyond our current epoch, create a new epoch
 	if slot > vs.currentEpoch.EndSlot {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"slot":            slot,
 			"currentEpochEnd": vs.currentEpoch.EndSlot,
 		}).Debug("updateEpochIfNeeded: Slot is beyond current epoch, building new epoch")
@@ -220,7 +218,7 @@ func (vs *ValidatorSelection) updateEpochIfNeeded(slot uint64) {
 		// make sure we capture the current slot correctly for building
 		vs.buildCurrentEpoch()
 	} else {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"slot":              slot,
 			"currentEpochStart": vs.currentEpoch.StartSlot,
 			"currentEpochEnd":   vs.currentEpoch.EndSlot,
@@ -230,19 +228,19 @@ func (vs *ValidatorSelection) updateEpochIfNeeded(slot uint64) {
 
 // getEpochForSlot returns the appropriate epoch for a given slot
 func (vs *ValidatorSelection) getEpochForSlot(slot uint64) *Epoch {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"slot":      slot,
 		"validator": vs.String(),
 	}).Debug("getEpochForSlot: Finding epoch for slot")
 
 	if vs.currentEpoch == nil {
-		logger.L.Debug("getEpochForSlot: No current epoch available")
+		log.Debug("getEpochForSlot: No current epoch available")
 		return nil
 	}
 
 	// Check if slot is in current epoch
 	if slot >= vs.currentEpoch.StartSlot && slot <= vs.currentEpoch.EndSlot {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"slot":       slot,
 			"epochStart": vs.currentEpoch.StartSlot,
 			"epochEnd":   vs.currentEpoch.EndSlot,
@@ -252,7 +250,7 @@ func (vs *ValidatorSelection) getEpochForSlot(slot uint64) *Epoch {
 
 	// For simplicity in this prototype, just use current epoch for other slots
 	// In a production system, you would maintain a history of epochs
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"slot":              slot,
 		"currentEpochStart": vs.currentEpoch.StartSlot,
 		"currentEpochEnd":   vs.currentEpoch.EndSlot,
@@ -262,7 +260,7 @@ func (vs *ValidatorSelection) getEpochForSlot(slot uint64) *Epoch {
 
 // IsLocalNodeValidatorForSlot checks if local node is validator for a slot
 func (vs *ValidatorSelection) IsLocalNodeValidatorForSlot(slot uint64) bool {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"slot":   slot,
 		"nodeID": vs.node.ID,
 	}).Debug("IsLocalNodeValidatorForSlot: Checking if local node is validator")
@@ -270,7 +268,7 @@ func (vs *ValidatorSelection) IsLocalNodeValidatorForSlot(slot uint64) bool {
 	validator := vs.GetValidatorForSlot(slot)
 	isValidator := validator == vs.node.ID
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"slot":        slot,
 		"validator":   validator,
 		"nodeID":      vs.node.ID,
@@ -282,15 +280,15 @@ func (vs *ValidatorSelection) IsLocalNodeValidatorForSlot(slot uint64) bool {
 
 // IsLocalNodeValidatorForCurrentSlot checks if local node is current validator
 func (vs *ValidatorSelection) IsLocalNodeValidatorForCurrentSlot() bool {
-	logger.L.WithField("nodeID", vs.node.ID).Debug("IsLocalNodeValidatorForCurrentSlot: Checking current slot")
+	log.WithField("nodeID", vs.node.ID).Debug("IsLocalNodeValidatorForCurrentSlot: Checking current slot")
 
 	currentSlot := vs.timeSync.GetCurrentSlot()
 
-	logger.L.WithField("currentSlot", currentSlot).Debug("IsLocalNodeValidatorForCurrentSlot: Got current slot")
+	log.WithField("currentSlot", currentSlot).Debug("IsLocalNodeValidatorForCurrentSlot: Got current slot")
 
 	isValidator := vs.IsLocalNodeValidatorForSlot(currentSlot)
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"currentSlot": currentSlot,
 		"nodeID":      vs.node.ID,
 		"isValidator": isValidator,
@@ -301,7 +299,7 @@ func (vs *ValidatorSelection) IsLocalNodeValidatorForCurrentSlot() bool {
 
 // Start begins validator selection service
 func (vs *ValidatorSelection) Start() {
-	logger.L.Debug("Start: Starting validator selection service")
+	log.Debug("Start: Starting validator selection service")
 
 	// Only build initial epoch if we don't have one yet
 	if vs.currentEpoch == nil {
@@ -312,37 +310,37 @@ func (vs *ValidatorSelection) Start() {
 	vs.running = true
 	go vs.monitorValidatorSelection()
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"validator": vs.String(),
 	}).Info("Validator selection service started")
 }
 
 // Stop stops the validator selection service
 func (vs *ValidatorSelection) Stop() {
-	logger.L.Debug("Stop: Stopping validator selection service")
+	log.Debug("Stop: Stopping validator selection service")
 
 	if vs.running {
 		vs.running = false
 		close(vs.stopChan)
-		logger.L.Info("Validator selection service stopped")
+		log.Info("Validator selection service stopped")
 	}
 }
 
 // monitorValidatorSelection continuously monitors for validator selection and generates blocks
 func (vs *ValidatorSelection) monitorValidatorSelection() {
-	logger.L.WithField("nodeID", vs.node.ID).Debug("monitorValidatorSelection: Starting validator monitoring loop")
+	log.WithField("nodeID", vs.node.ID).Debug("monitorValidatorSelection: Starting validator monitoring loop")
 
 	// Initialize lastSlot to an invalid value to ensure first slot is always processed
 	var lastSlot uint64 = ^uint64(0) // Max uint64 value to ensure first slot comparison triggers
 
 	// Check initial slot immediately when starting
 	currentSlot := vs.timeSync.GetCurrentSlot()
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"initialSlot": currentSlot,
 		"lastSlot":    lastSlot,
 		"nodeID":      vs.node.ID,
 	}).Debug("monitorValidatorSelection: Initial slot check")
-	
+
 	if currentSlot != lastSlot {
 		vs.ProcessSlotTransition(lastSlot, currentSlot)
 		lastSlot = currentSlot
@@ -351,14 +349,14 @@ func (vs *ValidatorSelection) monitorValidatorSelection() {
 	for vs.running {
 		select {
 		case <-vs.stopChan:
-			logger.L.Debug("monitorValidatorSelection: Received stop signal")
+			log.Debug("monitorValidatorSelection: Received stop signal")
 			return
 		default:
 			currentSlot := vs.timeSync.GetCurrentSlot()
 
 			// Check if we've moved to a new slot
 			if currentSlot != lastSlot {
-				logger.L.WithFields(logger.Fields{
+				log.WithFields(logger.Fields{
 					"previousSlot": lastSlot,
 					"currentSlot":  currentSlot,
 					"nodeID":       vs.node.ID,
@@ -372,12 +370,12 @@ func (vs *ValidatorSelection) monitorValidatorSelection() {
 		}
 	}
 
-	logger.L.Debug("monitorValidatorSelection: Validator monitoring loop ended")
+	log.Debug("monitorValidatorSelection: Validator monitoring loop ended")
 }
 
 // ProcessSlotTransition handles the logic when a slot transition is detected
 func (vs *ValidatorSelection) ProcessSlotTransition(previousSlot, currentSlot uint64) {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"previousSlot": previousSlot,
 		"currentSlot":  currentSlot,
 		"nodeID":       vs.node.ID,
@@ -388,46 +386,45 @@ func (vs *ValidatorSelection) ProcessSlotTransition(previousSlot, currentSlot ui
 
 	// Check if we're the validator for this slot
 	isValidator := vs.IsLocalNodeValidatorForSlot(currentSlot)
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"currentSlot": currentSlot,
 		"nodeID":      vs.node.ID,
 		"isValidator": isValidator,
 	}).Debug("processSlotTransition: Validator check result")
-	
+
 	if isValidator {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"currentSlot": currentSlot,
 			"nodeID":      vs.node.ID,
 		}).Info("processSlotTransition: Node selected as validator for current slot")
-		
+
 		// Note: Block generation is handled by the Consensus Engine, not here
 		// ValidatorSelection is only responsible for determining validator status
 	} else {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"currentSlot": currentSlot,
 			"nodeID":      vs.node.ID,
 		}).Debug("processSlotTransition: Node not selected as validator for current slot")
 	}
 }
 
-
 // GetEpochHash returns the current epoch hash
 // Other nodes can compare this to verify they have the same participant view
 func (vs *ValidatorSelection) GetEpochHash() string {
-	logger.L.WithField("validator", vs.String()).Debug("GetEpochHash: Getting current epoch hash")
+	log.WithField("validator", vs.String()).Debug("GetEpochHash: Getting current epoch hash")
 
 	if vs.currentEpoch == nil {
-		logger.L.Debug("GetEpochHash: No current epoch available")
+		log.Debug("GetEpochHash: No current epoch available")
 		return ""
 	}
 
-	logger.L.WithField("epochHash", vs.currentEpoch.EpochHash[:8]).Debug("GetEpochHash: Returning epoch hash")
+	log.WithField("epochHash", vs.currentEpoch.EpochHash[:8]).Debug("GetEpochHash: Returning epoch hash")
 	return vs.currentEpoch.EpochHash
 }
 
 // LogValidatorSchedule prints the validator schedule for upcoming slots
 func (vs *ValidatorSelection) LogValidatorSchedule(count int) {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"validator": vs.String(),
 		"count":     count,
 	}).Debug("LogValidatorSchedule: Generating validator schedule")
@@ -454,7 +451,7 @@ func (vs *ValidatorSelection) LogValidatorSchedule(count int) {
 		fmt.Printf("Slot %d: %s%s\n", slot, validator, localNodeIndicator)
 	}
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"currentSlot":    currentSlot,
 		"scheduledSlots": count,
 		"validators":     scheduledValidators,

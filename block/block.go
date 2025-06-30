@@ -12,6 +12,8 @@ import (
 
 const PrevHashOfGenesis = "0000000000000000000000000000000000000000000000000000000000000000"
 
+var log = logger.Logger
+
 type Block struct {
 	Index              uint64
 	Timestamp          int64
@@ -24,7 +26,7 @@ type Block struct {
 }
 
 func (block *Block) CalculateHash() []byte {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"index":     block.Index,
 		"timestamp": block.Timestamp,
 		"prevHash":  block.PrevHash,
@@ -45,15 +47,15 @@ func (block *Block) CalculateHash() []byte {
 	sha.Write([]byte(record))
 	hash := sha.Sum(nil)
 
-	logger.L.WithField("hashHex", hex.EncodeToString(hash)).Debug("Block hash calculated")
+	log.WithField("hashHex", hex.EncodeToString(hash)).Debug("Block hash calculated")
 	return hash
 }
 
 func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
-	logger.L.WithField("validator", creatorAccount.Address).Info("Creating genesis block")
+	log.WithField("validator", creatorAccount.Address).Info("Creating genesis block")
 
 	currentTime := time.Now().Unix()
-	logger.L.WithField("timestamp", currentTime).Debug("Setting genesis block timestamp")
+	log.WithField("timestamp", currentTime).Debug("Setting genesis block timestamp")
 
 	genesisBlock := &Block{
 		Index:            0,
@@ -64,15 +66,15 @@ func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
 	}
 
 	// Sign the block
-	logger.L.Debug("Signing genesis block")
+	log.Debug("Signing genesis block")
 	signature, err := creatorAccount.Sign(genesisBlock.CalculateHash())
 	if err != nil {
-		logger.L.WithError(err).Error("Failed to sign genesis block")
+		log.WithError(err).Error("Failed to sign genesis block")
 		return nil, err
 	}
 	genesisBlock.Signature = signature
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"index":     genesisBlock.Index,
 		"timestamp": genesisBlock.Timestamp,
 		"validator": genesisBlock.ValidatorAddress,
@@ -84,7 +86,7 @@ func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
 
 // StoreHash calculates and stores the hash in the block
 func (block *Block) StoreHash() {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"index":     block.Index,
 		"timestamp": block.Timestamp,
 		"validator": block.ValidatorAddress,
@@ -93,7 +95,7 @@ func (block *Block) StoreHash() {
 	hashBytes := block.CalculateHash()
 	block.Hash = hex.EncodeToString(hashBytes)
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"index": block.Index,
 		"hash":  block.Hash,
 	}).Debug("Block hash stored successfully")
@@ -101,7 +103,7 @@ func (block *Block) StoreHash() {
 
 // Sign signs a block with a private key
 func (block *Block) Sign(privateKey string) {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"index":     block.Index,
 		"timestamp": block.Timestamp,
 		"hash":      block.Hash,
@@ -112,7 +114,7 @@ func (block *Block) Sign(privateKey string) {
 	signatureStr := fmt.Sprintf("signed-%s-with-%s", block.Hash, privateKey)
 	block.Signature = []byte(signatureStr)
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"index":        block.Index,
 		"signatureLen": len(block.Signature),
 	}).Debug("Block signed successfully")
@@ -120,7 +122,7 @@ func (block *Block) Sign(privateKey string) {
 
 // VerifySignature verifies the signature on a block
 func (block *Block) VerifySignature() bool {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"index":        block.Index,
 		"hash":         block.Hash,
 		"signatureLen": len(block.Signature),
@@ -134,9 +136,9 @@ func (block *Block) VerifySignature() bool {
 	valid := len(signatureStr) > len(expectedPrefix) && signatureStr[:len(expectedPrefix)] == expectedPrefix
 
 	if valid {
-		logger.L.WithField("index", block.Index).Debug("Block signature verified successfully")
+		log.WithField("index", block.Index).Debug("Block signature verified successfully")
 	} else {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"index":        block.Index,
 			"signatureLen": len(block.Signature),
 		}).Warn("Block signature verification failed")

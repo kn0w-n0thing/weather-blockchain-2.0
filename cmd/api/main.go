@@ -12,9 +12,11 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+var log = logger.Logger
+
 func main() {
 	// Logger is automatically initialized via init() function
-	
+
 	app := &cli.App{
 		Name:        "weather-blockchain-api",
 		Usage:       "REST API server for monitoring weather blockchain nodes",
@@ -39,7 +41,7 @@ func main() {
 
 	err := app.Run(os.Args)
 	if err != nil {
-		logger.L.WithError(err).Fatal("Application failed")
+		log.WithError(err).Fatal("Application failed")
 	}
 }
 
@@ -50,12 +52,12 @@ func runAPIServer(c *cli.Context) error {
 	// Set log level
 	level, err := logrus.ParseLevel(logLevel)
 	if err != nil {
-		logger.L.WithError(err).Warn("Invalid log level, using info")
+		log.WithError(err).Warn("Invalid log level, using info")
 		level = logrus.InfoLevel
 	}
-	logger.L.SetLevel(level)
+	log.SetLevel(level)
 
-	logger.L.WithFields(logrus.Fields{
+	log.WithFields(logrus.Fields{
 		"port":     port,
 		"logLevel": level,
 		"version":  c.App.Version,
@@ -68,21 +70,21 @@ func runAPIServer(c *cli.Context) error {
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-		
+
 		sig := <-sigChan
-		logger.L.WithField("signal", sig).Info("Received shutdown signal")
-		
+		log.WithField("signal", sig).Info("Received shutdown signal")
+
 		err := server.Stop()
 		if err != nil {
-			logger.L.WithError(err).Error("Error stopping server")
+			log.WithError(err).Error("Error stopping server")
 		}
-		
-		logger.L.Info("Server stopped gracefully")
+
+		log.Info("Server stopped gracefully")
 		os.Exit(0)
 	}()
 
 	// Start the server (this blocks)
-	logger.L.WithField("port", port).Info("API server starting...")
+	log.WithField("port", port).Info("API server starting...")
 	err = server.Start()
 	if err != nil {
 		return fmt.Errorf("failed to start API server: %w", err)

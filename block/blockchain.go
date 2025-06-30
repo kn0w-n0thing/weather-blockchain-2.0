@@ -31,15 +31,15 @@ func (blockchain *Blockchain) GetBlockCount() int {
 
 // NewBlockchain creates an empty blockchain
 func NewBlockchain(dataPath ...string) *Blockchain {
-	logger.L.Debug("Creating new blockchain")
+	log.Debug("Creating new blockchain")
 	path := DataDirectory // Default path
 
 	// If a path was provided, use it instead
 	if len(dataPath) > 0 && dataPath[0] != "" {
 		path = dataPath[0]
-		logger.L.WithField("path", path).Debug("Using custom data path for blockchain")
+		log.WithField("path", path).Debug("Using custom data path for blockchain")
 	} else {
-		logger.L.WithField("path", path).Debug("Using default data path for blockchain")
+		log.WithField("path", path).Debug("Using default data path for blockchain")
 	}
 
 	blockchain := &Blockchain{
@@ -48,13 +48,13 @@ func NewBlockchain(dataPath ...string) *Blockchain {
 		dataPath:   path,
 	}
 
-	logger.L.Info("New blockchain instance created")
+	log.Info("New blockchain instance created")
 	return blockchain
 }
 
 // AddBlock adds a new block to the blockchain
 func (blockchain *Blockchain) AddBlock(block *Block) error {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex":         block.Index,
 		"blockValidatorAddr": block.ValidatorAddress,
 		"timestamp":          block.Timestamp,
@@ -65,11 +65,11 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 
 	// If it's the genesis block
 	if len(blockchain.Blocks) == 0 {
-		logger.L.Debug("Adding genesis block to empty blockchain")
+		log.Debug("Adding genesis block to empty blockchain")
 
 		// Verify the block is actually a genesis block
 		if block.Index != 0 || block.PrevHash != PrevHashOfGenesis {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"blockIndex":       block.Index,
 				"blockPrevHash":    block.PrevHash,
 				"expectedPrevHash": PrevHashOfGenesis,
@@ -84,7 +84,7 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 		blockchain.Blocks = append(blockchain.Blocks, block)
 		blockchain.LatestHash = block.Hash
 
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockHash":   block.Hash,
 			"chainLength": len(blockchain.Blocks),
 		}).Info("Genesis block added to blockchain")
@@ -92,10 +92,10 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 	}
 
 	// For non-genesis blocks, just do basic validation
-	logger.L.WithField("blockIndex", block.Index).Debug("Validating non-genesis block")
+	log.WithField("blockIndex", block.Index).Debug("Validating non-genesis block")
 	err := blockchain.validateBlock(block)
 	if err != nil {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex": block.Index,
 			"error":      err.Error(),
 		}).Error("Block validation failed")
@@ -109,7 +109,7 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 	blockchain.Blocks = append(blockchain.Blocks, block)
 	blockchain.LatestHash = block.Hash
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex":  block.Index,
 		"blockHash":   block.Hash,
 		"chainLength": len(blockchain.Blocks),
@@ -119,7 +119,7 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 
 // validateBlock checks if a block is valid to be added to the blockchain
 func (blockchain *Blockchain) validateBlock(block *Block) error {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex": block.Index,
 		"blockHash":  block.Hash,
 	}).Debug("Validating block")
@@ -130,20 +130,20 @@ func (blockchain *Blockchain) validateBlock(block *Block) error {
 	calculatedHashHex := hex.EncodeToString(calculatedHash)
 
 	if calculatedHashHex != block.Hash {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockHash":      block.Hash,
 			"calculatedHash": calculatedHashHex,
 		}).Warn("Invalid block hash")
 		return errors.New("invalid block hash")
 	}
 
-	logger.L.WithField("blockIndex", block.Index).Debug("Block validation successful")
+	log.WithField("blockIndex", block.Index).Debug("Block validation successful")
 	return nil
 }
 
 // validateBlockForChain validates a block for placement in the chain
 func (blockchain *Blockchain) validateBlockForChain(block *Block, previousBlock *Block) error {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex": block.Index,
 		"blockHash":  block.Hash,
 		"prevIndex":  previousBlock.Index,
@@ -151,7 +151,7 @@ func (blockchain *Blockchain) validateBlockForChain(block *Block, previousBlock 
 
 	// Check if the index is correct
 	if block.Index != previousBlock.Index+1 {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex":     block.Index,
 			"prevBlockIndex": previousBlock.Index,
 			"expectedIndex":  previousBlock.Index + 1,
@@ -161,7 +161,7 @@ func (blockchain *Blockchain) validateBlockForChain(block *Block, previousBlock 
 
 	// Check if the previous hash matches
 	if block.PrevHash != previousBlock.Hash {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockPrevHash": block.PrevHash,
 			"prevBlockHash": previousBlock.Hash,
 		}).Warn("Invalid previous hash")
@@ -195,7 +195,7 @@ func (blockchain *Blockchain) CanAddDirectly(block *Block) error {
 
 // TryAddBlockWithForkResolution attempts to add a block, handling forks if necessary
 func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex": block.Index,
 		"blockHash":  block.Hash,
 	}).Debug("Trying to add block with fork resolution")
@@ -207,7 +207,7 @@ func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error 
 		return blockchain.AddBlock(block)
 	}
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex": block.Index,
 		"error":      err.Error(),
 	}).Debug("Cannot add block directly, checking for fork resolution")
@@ -218,7 +218,7 @@ func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error 
 	blockchain.mutex.RUnlock()
 
 	if prevBlock == nil {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex":    block.Index,
 			"blockPrevHash": block.PrevHash,
 		}).Debug("Previous block not found, cannot place block")
@@ -227,7 +227,7 @@ func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error 
 
 	// Validate the block can extend from the found previous block
 	if err := blockchain.validateBlockForChain(block, prevBlock); err != nil {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex": block.Index,
 			"error":      err.Error(),
 		}).Debug("Block cannot extend from found previous block")
@@ -241,23 +241,23 @@ func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error 
 	newChainHeight := block.Index + 1
 	blockchain.mutex.RUnlock()
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"currentHeight":  currentHeight,
 		"newChainHeight": newChainHeight,
 		"blockIndex":     block.Index,
 	}).Debug("Comparing chain heights for fork resolution")
 
 	if newChainHeight > currentHeight {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex":     block.Index,
 			"currentHeight":  currentHeight,
 			"newChainHeight": newChainHeight,
 		}).Info("New block creates longer chain, reorganizing blockchain")
-		
+
 		// Reorganize the blockchain to accept the longer chain
 		return blockchain.reorganizeChain(block)
 	} else {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex":     block.Index,
 			"currentHeight":  currentHeight,
 			"newChainHeight": newChainHeight,
@@ -268,7 +268,7 @@ func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error 
 
 // reorganizeChain reorganizes the blockchain to accept a longer chain
 func (blockchain *Blockchain) reorganizeChain(newBlock *Block) error {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"newBlockIndex": newBlock.Index,
 		"newBlockHash":  newBlock.Hash,
 	}).Debug("Starting blockchain reorganization")
@@ -284,20 +284,20 @@ func (blockchain *Blockchain) reorganizeChain(newBlock *Block) error {
 			break
 		}
 	}
-	
+
 	if commonAncestor == nil {
-		logger.L.WithField("prevHash", newBlock.PrevHash).Error("Cannot find common ancestor for reorganization")
+		log.WithField("prevHash", newBlock.PrevHash).Error("Cannot find common ancestor for reorganization")
 		return errors.New("cannot find common ancestor")
 	}
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"ancestorIndex": commonAncestor.Index,
 		"ancestorHash":  commonAncestor.Hash,
 	}).Debug("Found common ancestor for chain reorganization")
 
 	// Build the new chain from the common ancestor
 	newChain := make([]*Block, 0)
-	
+
 	// Add blocks up to and including the common ancestor
 	for i := 0; i <= int(commonAncestor.Index); i++ {
 		if i < len(blockchain.Blocks) {
@@ -307,7 +307,7 @@ func (blockchain *Blockchain) reorganizeChain(newBlock *Block) error {
 
 	// Validate the new block first
 	if err := blockchain.validateBlock(newBlock); err != nil {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex": newBlock.Index,
 			"error":      err.Error(),
 		}).Error("New block validation failed during reorganization")
@@ -316,7 +316,7 @@ func (blockchain *Blockchain) reorganizeChain(newBlock *Block) error {
 
 	// Store hash in the new block
 	newBlock.StoreHash()
-	
+
 	// Add the new block to the chain
 	newChain = append(newChain, newBlock)
 
@@ -324,7 +324,7 @@ func (blockchain *Blockchain) reorganizeChain(newBlock *Block) error {
 	blockchain.Blocks = newChain
 	blockchain.LatestHash = newBlock.Hash
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"newChainLength": len(newChain),
 		"newLatestHash":  blockchain.LatestHash,
 		"reorganizedTo":  newBlock.Index,
@@ -335,14 +335,14 @@ func (blockchain *Blockchain) reorganizeChain(newBlock *Block) error {
 
 // GetBlockByHash retrieves a block by its hash
 func (blockchain *Blockchain) GetBlockByHash(hash string) *Block {
-	logger.L.WithField("hash", hash).Debug("Retrieving block by hash")
+	log.WithField("hash", hash).Debug("Retrieving block by hash")
 
 	blockchain.mutex.RLock()
 	defer blockchain.mutex.RUnlock()
 
 	for _, block := range blockchain.Blocks {
 		if block.Hash == hash {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"hash":  hash,
 				"index": block.Index,
 			}).Debug("Block found by hash")
@@ -350,7 +350,7 @@ func (blockchain *Blockchain) GetBlockByHash(hash string) *Block {
 		}
 	}
 
-	logger.L.WithField("hash", hash).Debug("Block not found with requested hash")
+	log.WithField("hash", hash).Debug("Block not found with requested hash")
 	return nil
 }
 
@@ -397,44 +397,44 @@ func (blockchain *Blockchain) IsBlockValid(block *Block) error {
 
 // VerifyChain validates the entire blockchain
 func (blockchain *Blockchain) VerifyChain() bool {
-	logger.L.Debug("Verifying entire blockchain")
+	log.Debug("Verifying entire blockchain")
 
 	blockchain.mutex.RLock()
 	defer blockchain.mutex.RUnlock()
 
 	if len(blockchain.Blocks) == 0 {
-		logger.L.Debug("Empty blockchain verified successfully")
+		log.Debug("Empty blockchain verified successfully")
 		return true
 	}
 
 	// Check the genesis block
 	genesisBlock := blockchain.Blocks[0]
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"genesisIndex":     genesisBlock.Index,
 		"genesisPrevHash":  genesisBlock.PrevHash,
 		"expectedPrevHash": PrevHashOfGenesis,
 	}).Debug("Verifying genesis block")
 
 	if genesisBlock.Index != 0 || genesisBlock.PrevHash != PrevHashOfGenesis {
-		logger.L.Error("Genesis block verification failed")
+		log.Error("Genesis block verification failed")
 		return false
 	}
 
 	// Verify each block in the chain
-	logger.L.WithField("blockCount", len(blockchain.Blocks)).Debug("Verifying blocks in chain")
+	log.WithField("blockCount", len(blockchain.Blocks)).Debug("Verifying blocks in chain")
 
 	for i := 1; i < len(blockchain.Blocks); i++ {
 		currentBlock := blockchain.Blocks[i]
 		previousBlock := blockchain.Blocks[i-1]
 
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex": currentBlock.Index,
 			"prevIndex":  previousBlock.Index,
 		}).Debug("Verifying block integrity")
 
 		// Check block index
 		if currentBlock.Index != previousBlock.Index+1 {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"blockIndex":    currentBlock.Index,
 				"prevIndex":     previousBlock.Index,
 				"expectedIndex": previousBlock.Index + 1,
@@ -444,7 +444,7 @@ func (blockchain *Blockchain) VerifyChain() bool {
 
 		// Check previous hash
 		if currentBlock.PrevHash != previousBlock.Hash {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"blockPrevHash": currentBlock.PrevHash,
 				"prevBlockHash": previousBlock.Hash,
 			}).Error("Previous hash verification failed")
@@ -456,7 +456,7 @@ func (blockchain *Blockchain) VerifyChain() bool {
 		calculatedHashHex := hex.EncodeToString(calculatedHash)
 
 		if calculatedHashHex != currentBlock.Hash {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"blockHash":      currentBlock.Hash,
 				"calculatedHash": calculatedHashHex,
 			}).Error("Block hash verification failed")
@@ -466,13 +466,13 @@ func (blockchain *Blockchain) VerifyChain() bool {
 		// Additional validation could go here
 	}
 
-	logger.L.Info("Blockchain verified successfully")
+	log.Info("Blockchain verified successfully")
 	return true
 }
 
 // SaveToDisk persists the blockchain to disk
 func (blockchain *Blockchain) SaveToDisk() error {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"dataPath":   blockchain.dataPath,
 		"blockCount": len(blockchain.Blocks),
 	}).Debug("Saving blockchain to disk")
@@ -483,7 +483,7 @@ func (blockchain *Blockchain) SaveToDisk() error {
 	// Create data directory if it doesn't exist
 	err := os.MkdirAll(blockchain.dataPath, 0755)
 	if err != nil {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"dataPath": blockchain.dataPath,
 			"error":    err.Error(),
 		}).Error("Failed to create data directory")
@@ -493,27 +493,27 @@ func (blockchain *Blockchain) SaveToDisk() error {
 	// Marshal blockchain data to JSON
 	data, err := json.MarshalIndent(blockchain.Blocks, "", "  ")
 	if err != nil {
-		logger.L.WithError(err).Error("Failed to marshal blockchain data to JSON")
+		log.WithError(err).Error("Failed to marshal blockchain data to JSON")
 		return errors.New("failed to marshal blockchain data: " + err.Error())
 	}
 
 	// Write to file
 	filePath := filepath.Join(blockchain.dataPath, ChainFile)
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"filePath": filePath,
 		"dataSize": len(data),
 	}).Debug("Writing blockchain data to file")
 
 	err = os.WriteFile(filePath, data, 0644)
 	if err != nil {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"filePath": filePath,
 			"error":    err.Error(),
 		}).Error("Failed to write blockchain to disk")
 		return errors.New("failed to write blockchain to disk: " + err.Error())
 	}
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"filePath":   filePath,
 		"blockCount": len(blockchain.Blocks),
 	}).Info("Blockchain successfully saved to disk")
@@ -522,26 +522,26 @@ func (blockchain *Blockchain) SaveToDisk() error {
 
 // LoadFromDisk loads the blockchain from disk
 func (blockchain *Blockchain) LoadFromDisk() error {
-	logger.L.WithField("dataPath", blockchain.dataPath).Debug("Loading blockchain from disk")
+	log.WithField("dataPath", blockchain.dataPath).Debug("Loading blockchain from disk")
 
 	blockchain.mutex.Lock()
 	defer blockchain.mutex.Unlock()
 
 	filePath := filepath.Join(blockchain.dataPath, ChainFile)
-	logger.L.WithField("filePath", filePath).Debug("Checking for blockchain file")
+	log.WithField("filePath", filePath).Debug("Checking for blockchain file")
 
 	// Check if file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		// No blockchain file exists yet - not an error
-		logger.L.Info("No blockchain file found, starting with empty chain")
+		log.Info("No blockchain file found, starting with empty chain")
 		return nil
 	}
 
 	// Read file
-	logger.L.WithField("filePath", filePath).Debug("Reading blockchain file")
+	log.WithField("filePath", filePath).Debug("Reading blockchain file")
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"filePath": filePath,
 			"error":    err.Error(),
 		}).Error("Failed to read blockchain file")
@@ -549,21 +549,21 @@ func (blockchain *Blockchain) LoadFromDisk() error {
 	}
 
 	// Unmarshal into blocks
-	logger.L.WithField("dataSize", len(data)).Debug("Unmarshaling blockchain data")
+	log.WithField("dataSize", len(data)).Debug("Unmarshaling blockchain data")
 	var blocks []*Block
 	err = json.Unmarshal(data, &blocks)
 	if err != nil {
-		logger.L.WithError(err).Error("Failed to unmarshal blockchain data")
+		log.WithError(err).Error("Failed to unmarshal blockchain data")
 		return errors.New("failed to unmarshal blockchain data: " + err.Error())
 	}
 
 	// Validate the loaded chain
 	if len(blocks) > 0 {
-		logger.L.WithField("blockCount", len(blocks)).Debug("Validating loaded blockchain")
+		log.WithField("blockCount", len(blocks)).Debug("Validating loaded blockchain")
 
 		// Verify the genesis block
 		if blocks[0].Index != 0 || blocks[0].PrevHash != PrevHashOfGenesis {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"genesisIndex":     blocks[0].Index,
 				"genesisPrevHash":  blocks[0].PrevHash,
 				"expectedPrevHash": PrevHashOfGenesis,
@@ -576,14 +576,14 @@ func (blockchain *Blockchain) LoadFromDisk() error {
 			currentBlock := blocks[i]
 			previousBlock := blocks[i-1]
 
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"blockIndex": currentBlock.Index,
 				"prevIndex":  previousBlock.Index,
 			}).Debug("Verifying block from stored chain")
 
 			// Check block index
 			if currentBlock.Index != previousBlock.Index+1 {
-				logger.L.WithFields(logger.Fields{
+				log.WithFields(logger.Fields{
 					"blockIndex":    currentBlock.Index,
 					"prevIndex":     previousBlock.Index,
 					"expectedIndex": previousBlock.Index + 1,
@@ -593,7 +593,7 @@ func (blockchain *Blockchain) LoadFromDisk() error {
 
 			// Check previous hash
 			if currentBlock.PrevHash != previousBlock.Hash {
-				logger.L.WithFields(logger.Fields{
+				log.WithFields(logger.Fields{
 					"blockPrevHash": currentBlock.PrevHash,
 					"prevBlockHash": previousBlock.Hash,
 				}).Error("Invalid previous hash in stored chain")
@@ -605,7 +605,7 @@ func (blockchain *Blockchain) LoadFromDisk() error {
 			calculatedHashHex := hex.EncodeToString(calculatedHash)
 
 			if calculatedHashHex != currentBlock.Hash {
-				logger.L.WithFields(logger.Fields{
+				log.WithFields(logger.Fields{
 					"blockHash":      currentBlock.Hash,
 					"calculatedHash": calculatedHashHex,
 				}).Error("Invalid block hash in stored chain")
@@ -617,12 +617,12 @@ func (blockchain *Blockchain) LoadFromDisk() error {
 		blockchain.Blocks = blocks
 		blockchain.LatestHash = blocks[len(blocks)-1].Hash
 
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockCount": len(blocks),
 			"latestHash": blockchain.LatestHash,
 		}).Info("Blockchain successfully loaded from disk")
 	} else {
-		logger.L.Warn("Loaded blockchain file contains no blocks")
+		log.Warn("Loaded blockchain file contains no blocks")
 	}
 
 	return nil
@@ -630,7 +630,7 @@ func (blockchain *Blockchain) LoadFromDisk() error {
 
 // AddBlockWithAutoSave AutoSave saves the blockchain to disk after each block addition
 func (blockchain *Blockchain) AddBlockWithAutoSave(block *Block) error {
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex": block.Index,
 		"validator":  block.ValidatorAddress,
 	}).Debug("Adding block to blockchain with auto-save")
@@ -638,7 +638,7 @@ func (blockchain *Blockchain) AddBlockWithAutoSave(block *Block) error {
 	// First add the block to the chain
 	err := blockchain.AddBlock(block)
 	if err != nil {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"blockIndex": block.Index,
 			"error":      err.Error(),
 		}).Error("Failed to add block during auto-save operation")
@@ -646,20 +646,20 @@ func (blockchain *Blockchain) AddBlockWithAutoSave(block *Block) error {
 	}
 
 	// Then save to disk
-	logger.L.Debug("Block added successfully, saving blockchain to disk")
+	log.Debug("Block added successfully, saving blockchain to disk")
 	err = blockchain.SaveToDisk()
 	if err != nil {
-		logger.L.WithError(err).Error("Failed to save blockchain to disk after adding block")
+		log.WithError(err).Error("Failed to save blockchain to disk after adding block")
 		return err
 	}
 
-	logger.L.WithField("blockIndex", block.Index).Info("Block added and blockchain saved to disk successfully")
+	log.WithField("blockIndex", block.Index).Info("Block added and blockchain saved to disk successfully")
 	return nil
 }
 
 // LoadBlockchainFromFile creates a new blockchain instance and loads it directly from the specified file
 func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
-	logger.L.WithField("filePath", filePath).Info("Loading blockchain directly from file")
+	log.WithField("filePath", filePath).Info("Loading blockchain directly from file")
 
 	// Get the directory path from the file path
 	dirPath := filepath.Dir(filePath)
@@ -671,22 +671,22 @@ func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
 	if filepath.Base(filePath) != ChainFile {
 		// Using a custom filename
 		customFileName := filepath.Base(filePath)
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"customFile":  customFileName,
 			"defaultFile": ChainFile,
 		}).Debug("Using custom blockchain filename")
 
 		// Check if file exists
 		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			logger.L.WithField("filePath", filePath).Error("Blockchain file not found")
+			log.WithField("filePath", filePath).Error("Blockchain file not found")
 			return nil, errors.New("blockchain file not found: " + filePath)
 		}
 
 		// Read file
-		logger.L.WithField("filePath", filePath).Debug("Reading blockchain file")
+		log.WithField("filePath", filePath).Debug("Reading blockchain file")
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"filePath": filePath,
 				"error":    err.Error(),
 			}).Error("Failed to read blockchain file")
@@ -694,21 +694,21 @@ func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
 		}
 
 		// Unmarshal into blocks
-		logger.L.WithField("dataSize", len(data)).Debug("Unmarshaling blockchain data")
+		log.WithField("dataSize", len(data)).Debug("Unmarshaling blockchain data")
 		var blocks []*Block
 		err = json.Unmarshal(data, &blocks)
 		if err != nil {
-			logger.L.WithError(err).Error("Failed to unmarshal blockchain data")
+			log.WithError(err).Error("Failed to unmarshal blockchain data")
 			return nil, errors.New("failed to unmarshal blockchain data: " + err.Error())
 		}
 
 		// Validate the loaded chain
 		if len(blocks) > 0 {
-			logger.L.WithField("blockCount", len(blocks)).Debug("Validating loaded blockchain")
+			log.WithField("blockCount", len(blocks)).Debug("Validating loaded blockchain")
 
 			// Verify the genesis block
 			if blocks[0].Index != 0 || blocks[0].PrevHash != PrevHashOfGenesis {
-				logger.L.WithFields(logger.Fields{
+				log.WithFields(logger.Fields{
 					"genesisIndex":     blocks[0].Index,
 					"genesisPrevHash":  blocks[0].PrevHash,
 					"expectedPrevHash": PrevHashOfGenesis,
@@ -723,7 +723,7 @@ func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
 
 				// Check block index
 				if currentBlock.Index != previousBlock.Index+1 {
-					logger.L.WithFields(logger.Fields{
+					log.WithFields(logger.Fields{
 						"blockIndex":    currentBlock.Index,
 						"prevIndex":     previousBlock.Index,
 						"expectedIndex": previousBlock.Index + 1,
@@ -733,7 +733,7 @@ func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
 
 				// Check previous hash
 				if currentBlock.PrevHash != previousBlock.Hash {
-					logger.L.WithFields(logger.Fields{
+					log.WithFields(logger.Fields{
 						"blockPrevHash": currentBlock.PrevHash,
 						"prevBlockHash": previousBlock.Hash,
 					}).Error("Invalid previous hash in stored chain")
@@ -745,7 +745,7 @@ func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
 				calculatedHashHex := hex.EncodeToString(calculatedHash)
 
 				if calculatedHashHex != currentBlock.Hash {
-					logger.L.WithFields(logger.Fields{
+					log.WithFields(logger.Fields{
 						"blockHash":      currentBlock.Hash,
 						"calculatedHash": calculatedHashHex,
 					}).Error("Invalid block hash in stored chain")
@@ -759,18 +759,18 @@ func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
 			blockchain.LatestHash = blocks[len(blocks)-1].Hash
 			blockchain.mutex.Unlock()
 
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"blockCount": len(blocks),
 				"latestHash": blockchain.LatestHash,
 			}).Info("Blockchain successfully loaded from custom file")
 		} else {
-			logger.L.Warn("Loaded blockchain file contains no blocks")
+			log.Warn("Loaded blockchain file contains no blocks")
 		}
 	} else {
 		// Load using the standard method
 		err := blockchain.LoadFromDisk()
 		if err != nil {
-			logger.L.WithError(err).Error("Failed to load blockchain from disk")
+			log.WithError(err).Error("Failed to load blockchain from disk")
 			return nil, err
 		}
 	}

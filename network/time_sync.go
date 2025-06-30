@@ -62,12 +62,12 @@ func (timeSync *TimeSync) String() string {
 
 // NewTimeSync creates a new TimeSync instance with Ethereum-inspired synchronization
 func NewTimeSync(networkManager NetworkManager) *TimeSync {
-	logger.L.Debug("NewTimeSync: Creating new time synchronization service")
+	log.Debug("NewTimeSync: Creating new time synchronization service")
 
 	// Initialize with the actual Ethereum Beacon Chain genesis time
 	beaconChainGenesis := time.Date(2020, 12, 1, 12, 0, 23, 0, time.UTC)
 
-	logger.L.WithField("genesisTime", beaconChainGenesis).Debug("NewTimeSync: Using genesis time")
+	log.WithField("genesisTime", beaconChainGenesis).Debug("NewTimeSync: Using genesis time")
 
 	// Use the network manager's ID as the validator ID
 	validatorID := generateValidatorID()
@@ -88,14 +88,14 @@ func NewTimeSync(networkManager NetworkManager) *TimeSync {
 		networkManager:  networkManager,
 	}
 
-	logger.L.WithField("ValidatorID", timeSync.ValidatorID).Debug("NewTimeSync: Generated validator ID")
+	log.WithField("ValidatorID", timeSync.ValidatorID).Debug("NewTimeSync: Generated validator ID")
 
 	for _, source := range NtpServerSource {
 		timeSync.AddSource(source)
-		logger.L.WithField("source", source).Debug("NewTimeSync: Added time source")
+		log.WithField("source", source).Debug("NewTimeSync: Added time source")
 	}
 
-	logger.L.Debug("NewTimeSync: Time synchronization service created")
+	log.Debug("NewTimeSync: Time synchronization service created")
 	return timeSync
 }
 
@@ -103,31 +103,31 @@ func NewTimeSync(networkManager NetworkManager) *TimeSync {
 func generateValidatorID() string {
 	// TODO: In a real implementation, this would be based on a public key
 	id := fmt.Sprintf("validator-%d", time.Now().UnixNano()%1000)
-	logger.L.WithField("id", id).Debug("generateValidatorID: Generated validator ID")
+	log.WithField("id", id).Debug("generateValidatorID: Generated validator ID")
 	return id
 }
 
 // Start begins the time synchronization service
 func (timeSync *TimeSync) Start() error {
-	logger.L.WithField("timeSync", timeSync.String()).Debug("Start: Starting time synchronization service")
+	log.WithField("timeSync", timeSync.String()).Debug("Start: Starting time synchronization service")
 
 	// Start background tasks
 	go timeSync.runSlotTracker()
 	go timeSync.runPeriodicSync()
 
-	logger.L.Info("Time synchronization service started")
+	log.Info("Time synchronization service started")
 	return nil
 }
 
 // AddSource adds an external time source
 func (timeSync *TimeSync) AddSource(address string) {
-	logger.L.WithField("source", address).Debug("AddSource: Adding external time source")
+	log.WithField("source", address).Debug("AddSource: Adding external time source")
 
 	timeSync.mutex.Lock()
 	defer timeSync.mutex.Unlock()
 	timeSync.externalSources[address] = true
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"source":      address,
 		"sourceCount": len(timeSync.externalSources),
 	}).Debug("AddSource: Added external time source")
@@ -135,13 +135,13 @@ func (timeSync *TimeSync) AddSource(address string) {
 
 // RemovePeer removes an external time source
 func (timeSync *TimeSync) RemovePeer(address string) {
-	logger.L.WithField("source", address).Debug("RemovePeer: Removing external time source")
+	log.WithField("source", address).Debug("RemovePeer: Removing external time source")
 
 	timeSync.mutex.Lock()
 	defer timeSync.mutex.Unlock()
 	delete(timeSync.externalSources, address)
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"source":      address,
 		"sourceCount": len(timeSync.externalSources),
 	}).Debug("RemovePeer: Removed external time source")
@@ -156,7 +156,7 @@ func (timeSync *TimeSync) GetNetworkTime() time.Time {
 	// Current time adjusted by network offset
 	networkTime := time.Now().Add(timeSync.timeOffset)
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"localTime":   time.Now(),
 		"offset":      timeSync.timeOffset,
 		"networkTime": networkTime,
@@ -167,14 +167,14 @@ func (timeSync *TimeSync) GetNetworkTime() time.Time {
 
 // IsTimeValid checks if a timestamp is within acceptable range of network time
 func (timeSync *TimeSync) IsTimeValid(timestamp time.Time) bool {
-	logger.L.WithField("timestamp", timestamp).Debug("IsTimeValid: Validating timestamp")
+	log.WithField("timestamp", timestamp).Debug("IsTimeValid: Validating timestamp")
 
 	networkTime := timeSync.GetNetworkTime()
 	diff := timestamp.Sub(networkTime)
 
 	valid := diff > -timeSync.allowedDrift && diff < timeSync.allowedDrift
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"timestamp":    timestamp,
 		"networkTime":  networkTime,
 		"diff":         diff,
@@ -189,7 +189,7 @@ func (timeSync *TimeSync) IsTimeValid(timestamp time.Time) bool {
 // GetCurrentSlot returns the current slot number
 // This method is part of the ITimeSync interface
 func (timeSync *TimeSync) GetCurrentSlot() uint64 {
-	logger.L.Trace("GetCurrentSlot: Calculating current slot")
+	log.Trace("GetCurrentSlot: Calculating current slot")
 
 	timeSync.mutex.RLock()
 	defer timeSync.mutex.RUnlock()
@@ -201,7 +201,7 @@ func (timeSync *TimeSync) GetCurrentSlot() uint64 {
 	// Calculate slot number based on elapsed time
 	slot := uint64(elapsed / SlotDuration)
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"networkTime":    networkTime,
 		"genesisTime":    timeSync.genesisTime,
 		"elapsed":        elapsed,
@@ -214,12 +214,12 @@ func (timeSync *TimeSync) GetCurrentSlot() uint64 {
 
 // GetCurrentEpoch returns the current epoch number
 func (timeSync *TimeSync) GetCurrentEpoch() uint64 {
-	logger.L.Debug("GetCurrentEpoch: Calculating current epoch")
+	log.Debug("GetCurrentEpoch: Calculating current epoch")
 
 	slot := timeSync.GetCurrentSlot()
 	epoch := slot / SlotsPerEpoch
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"currentSlot":     slot,
 		"slotsPerEpoch":   SlotsPerEpoch,
 		"calculatedEpoch": epoch,
@@ -230,7 +230,7 @@ func (timeSync *TimeSync) GetCurrentEpoch() uint64 {
 
 // IsValidatorForCurrentSlot checks if this node is a validator for the current slot
 func (timeSync *TimeSync) IsValidatorForCurrentSlot() bool {
-	logger.L.WithField("ValidatorID", timeSync.ValidatorID).Debug("IsValidatorForCurrentSlot: Checking validator status")
+	log.WithField("ValidatorID", timeSync.ValidatorID).Debug("IsValidatorForCurrentSlot: Checking validator status")
 
 	timeSync.mutex.RLock()
 	defer timeSync.mutex.RUnlock()
@@ -238,30 +238,30 @@ func (timeSync *TimeSync) IsValidatorForCurrentSlot() bool {
 	currentSlot := timeSync.GetCurrentSlot()
 	slotKey := currentSlot % 10000 // We use modulo to limit map size
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"currentSlot": currentSlot,
 		"slotKey":     slotKey,
 	}).Debug("IsValidatorForCurrentSlot: Calculated slot key")
 
 	validators, exists := timeSync.validatorSlot[slotKey]
 	if !exists {
-		logger.L.WithField("slotKey", slotKey).Debug("IsValidatorForCurrentSlot: No validators assigned to this slot, assigning now")
+		log.WithField("slotKey", slotKey).Debug("IsValidatorForCurrentSlot: No validators assigned to this slot, assigning now")
 		// Release read lock and acquire write lock to assign validators
 		timeSync.mutex.RUnlock()
 		timeSync.mutex.Lock()
-		
+
 		// Check again in case another goroutine assigned while we were waiting for the lock
 		validators, exists = timeSync.validatorSlot[slotKey]
 		if !exists {
 			timeSync.assignValidatorsForSlot(currentSlot)
 			validators = timeSync.validatorSlot[slotKey]
 		}
-		
+
 		timeSync.mutex.Unlock()
 		timeSync.mutex.RLock() // Re-acquire read lock for the rest of the function
-		
+
 		if len(validators) == 0 {
-			logger.L.WithField("slotKey", slotKey).Debug("IsValidatorForCurrentSlot: No validators available after assignment")
+			log.WithField("slotKey", slotKey).Debug("IsValidatorForCurrentSlot: No validators available after assignment")
 			return false
 		}
 	}
@@ -269,7 +269,7 @@ func (timeSync *TimeSync) IsValidatorForCurrentSlot() bool {
 	// Check if our validator ID is in the list for this slot
 	for _, v := range validators {
 		if v == timeSync.ValidatorID {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"ValidatorID": timeSync.ValidatorID,
 				"currentSlot": currentSlot,
 			}).Debug("IsValidatorForCurrentSlot: Node is a validator for current slot")
@@ -277,7 +277,7 @@ func (timeSync *TimeSync) IsValidatorForCurrentSlot() bool {
 		}
 	}
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"ValidatorID": timeSync.ValidatorID,
 		"currentSlot": currentSlot,
 		"validators":  validators,
@@ -287,14 +287,14 @@ func (timeSync *TimeSync) IsValidatorForCurrentSlot() bool {
 
 // runSlotTracker continuously tracks the current slot and epoch
 func (timeSync *TimeSync) runSlotTracker() {
-	logger.L.Debug("runSlotTracker: Starting slot tracking loop")
+	log.Debug("runSlotTracker: Starting slot tracking loop")
 	var lastSlot uint64 = 0
 
 	for {
 		currentSlot := timeSync.GetCurrentSlot()
 
 		if currentSlot != lastSlot {
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"previousSlot": lastSlot,
 				"newSlot":      currentSlot,
 			}).Debug("runSlotTracker: Detected slot transition")
@@ -304,7 +304,7 @@ func (timeSync *TimeSync) runSlotTracker() {
 			timeSync.currentSlot = currentSlot
 			timeSync.currentEpoch = currentSlot / SlotsPerEpoch
 
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"slot":  currentSlot,
 				"epoch": timeSync.currentEpoch,
 			}).Debug("runSlotTracker: Updated current slot and epoch")
@@ -316,7 +316,7 @@ func (timeSync *TimeSync) runSlotTracker() {
 			timeSync.mutex.Unlock()
 
 			// Log slot transition
-			logger.L.WithFields(logger.Fields{
+			log.WithFields(logger.Fields{
 				"slot":  currentSlot,
 				"epoch": currentSlot / SlotsPerEpoch,
 			}).Info("Moved to new slot")
@@ -332,28 +332,28 @@ func (timeSync *TimeSync) runSlotTracker() {
 
 // assignValidatorsForSlot determines which validators are assigned to a slot
 func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
-	logger.L.WithField("slot", slot).Debug("assignValidatorsForSlot: Assigning validators to slot")
+	log.WithField("slot", slot).Debug("assignValidatorsForSlot: Assigning validators to slot")
 
 	// Get all available network nodes as validator candidates
 	var candidateValidators []string
-	
+
 	if timeSync.networkManager != nil {
 		// Add this node as a candidate
 		candidateValidators = append(candidateValidators, timeSync.networkManager.GetID())
-		
+
 		// Add all discovered peers as candidates
 		peers := timeSync.networkManager.GetPeers()
 		for peerID := range peers {
 			candidateValidators = append(candidateValidators, peerID)
 		}
-		
-		logger.L.WithFields(logger.Fields{
+
+		log.WithFields(logger.Fields{
 			"candidateCount": len(candidateValidators),
 			"candidates":     candidateValidators,
 		}).Debug("assignValidatorsForSlot: Collected candidate validators from network")
 	} else {
 		// Fallback to generating fake validators if no network manager
-		logger.L.Warn("assignValidatorsForSlot: No network manager available, using fallback validators")
+		log.Warn("assignValidatorsForSlot: No network manager available, using fallback validators")
 		for i := 0; i < 10; i++ {
 			candidateValidators = append(candidateValidators, fmt.Sprintf("validator-%d", i))
 		}
@@ -361,7 +361,7 @@ func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 
 	// If no candidates available, use fallback
 	if len(candidateValidators) == 0 {
-		logger.L.Warn("assignValidatorsForSlot: No candidate validators found, using fallback")
+		log.Warn("assignValidatorsForSlot: No candidate validators found, using fallback")
 		candidateValidators = []string{timeSync.ValidatorID}
 	}
 
@@ -371,7 +371,7 @@ func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 	seed.Add(seed, big.NewInt(12345))
 	seed.Mod(seed, big.NewInt(2147483648))
 
-	logger.L.WithField("seed", seed.String()).Debug("assignValidatorsForSlot: Generated seed for selection")
+	log.WithField("seed", seed.String()).Debug("assignValidatorsForSlot: Generated seed for selection")
 
 	// Select validators for this slot from the candidate pool
 	validators := make([]string, 0)
@@ -384,7 +384,7 @@ func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 		selectedValidator := candidateValidators[validatorIndex.Int64()]
 		validators = append(validators, selectedValidator)
 
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"index":             i,
 			"validatorIndex":    validatorIndex.Int64(),
 			"selectedValidator": selectedValidator,
@@ -403,7 +403,7 @@ func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 		}
 	}
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"slot":            slot,
 		"slotKey":         slotKey,
 		"validators":      validators,
@@ -423,11 +423,11 @@ func min(a, b int) int {
 
 // syncWithSource synchronizes time with an external source
 func (timeSync *TimeSync) syncWithSource(address string) error {
-	logger.L.WithField("source", address).Debug("syncWithSource: Synchronizing with time source")
+	log.WithField("source", address).Debug("syncWithSource: Synchronizing with time source")
 
 	response, err := ntp.Query(address)
 	if err != nil {
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"source": address,
 			"error":  err,
 		}).Warn("syncWithSource: Failed to query time source")
@@ -437,7 +437,7 @@ func (timeSync *TimeSync) syncWithSource(address string) error {
 	// Calculate the offset
 	offset := response.ClockOffset
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"source": address,
 		"offset": offset,
 	}).Debug("syncWithSource: Received time data from source")
@@ -449,7 +449,7 @@ func (timeSync *TimeSync) syncWithSource(address string) error {
 	// Update our time offset
 	timeSync.timeOffset = (timeSync.timeOffset + offset) / 2
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"source":         address,
 		"previousOffset": oldOffset,
 		"newOffset":      timeSync.timeOffset,
@@ -461,14 +461,14 @@ func (timeSync *TimeSync) syncWithSource(address string) error {
 
 // runPeriodicSync periodically syncs with external time sources
 func (timeSync *TimeSync) runPeriodicSync() {
-	logger.L.WithField("interval", SyncInterval).Debug("runPeriodicSync: Starting periodic time synchronization")
+	log.WithField("interval", SyncInterval).Debug("runPeriodicSync: Starting periodic time synchronization")
 
 	ticker := time.NewTicker(SyncInterval)
 	defer ticker.Stop()
 
 	for {
 		<-ticker.C
-		logger.L.Debug("runPeriodicSync: Running scheduled time synchronization")
+		log.Debug("runPeriodicSync: Running scheduled time synchronization")
 
 		syncCount := 0
 		errorCount := 0
@@ -478,7 +478,7 @@ func (timeSync *TimeSync) runPeriodicSync() {
 			err := timeSync.syncWithSource(addr)
 			if err != nil {
 				errorCount++
-				logger.L.WithFields(logger.Fields{
+				log.WithFields(logger.Fields{
 					"source": addr,
 					"error":  err,
 				}).Warn("runPeriodicSync: Failed to sync with time source")
@@ -491,7 +491,7 @@ func (timeSync *TimeSync) runPeriodicSync() {
 		timeSync.lastSyncTime = time.Now()
 		timeSync.mutex.Unlock()
 
-		logger.L.WithFields(logger.Fields{
+		log.WithFields(logger.Fields{
 			"sourceCount":  len(timeSync.externalSources),
 			"successCount": syncCount,
 			"errorCount":   errorCount,
@@ -502,14 +502,14 @@ func (timeSync *TimeSync) runPeriodicSync() {
 
 // GetSlotStartTime returns the start time of a given slot
 func (timeSync *TimeSync) GetSlotStartTime(slot uint64) time.Time {
-	logger.L.WithField("slot", slot).Debug("GetSlotStartTime: Calculating start time for slot")
+	log.WithField("slot", slot).Debug("GetSlotStartTime: Calculating start time for slot")
 
 	timeSync.mutex.RLock()
 	defer timeSync.mutex.RUnlock()
 
 	startTime := timeSync.genesisTime.Add(time.Duration(slot) * SlotDuration)
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"slot":         slot,
 		"genesisTime":  timeSync.genesisTime,
 		"slotDuration": SlotDuration,
@@ -521,13 +521,13 @@ func (timeSync *TimeSync) GetSlotStartTime(slot uint64) time.Time {
 
 // GetTimeToNextSlot returns the duration until the next slot starts
 func (timeSync *TimeSync) GetTimeToNextSlot() time.Duration {
-	logger.L.Debug("GetTimeToNextSlot: Calculating time to next slot")
+	log.Debug("GetTimeToNextSlot: Calculating time to next slot")
 
 	currentSlot := timeSync.GetCurrentSlot()
 	nextSlotStart := timeSync.GetSlotStartTime(currentSlot + 1)
 	timeToNext := nextSlotStart.Sub(timeSync.GetNetworkTime())
 
-	logger.L.WithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"currentSlot":   currentSlot,
 		"nextSlot":      currentSlot + 1,
 		"nextSlotStart": nextSlotStart,
@@ -540,11 +540,11 @@ func (timeSync *TimeSync) GetTimeToNextSlot() time.Duration {
 // getMedianOffset is maintained for compatibility with the original interface
 // In this implementation, it just returns the current offset
 func (timeSync *TimeSync) getMedianOffset() time.Duration {
-	logger.L.Debug("getMedianOffset: Getting current time offset")
+	log.Debug("getMedianOffset: Getting current time offset")
 
 	timeSync.mutex.RLock()
 	defer timeSync.mutex.RUnlock()
 
-	logger.L.WithField("offset", timeSync.timeOffset).Debug("getMedianOffset: Returning current time offset")
+	log.WithField("offset", timeSync.timeOffset).Debug("getMedianOffset: Returning current time offset")
 	return timeSync.timeOffset
 }
