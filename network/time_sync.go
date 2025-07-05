@@ -63,6 +63,10 @@ func (timeSync *TimeSync) String() string {
 // NewTimeSync creates a new TimeSync instance with Ethereum-inspired synchronization
 func NewTimeSync(networkManager NetworkManager) *TimeSync {
 	log.Debug("NewTimeSync: Creating new time synchronization service")
+	if networkManager == nil {
+		log.Errorf("NewTimeSync: NetworkManager is nil")
+		return nil
+	}
 
 	// Initialize with the actual Ethereum Beacon Chain genesis time
 	beaconChainGenesis := time.Date(2020, 12, 1, 12, 0, 23, 0, time.UTC)
@@ -70,10 +74,7 @@ func NewTimeSync(networkManager NetworkManager) *TimeSync {
 	log.WithField("genesisTime", beaconChainGenesis).Debug("NewTimeSync: Using genesis time")
 
 	// Use the network manager's ID as the validator ID
-	validatorID := generateValidatorID()
-	if networkManager != nil {
-		validatorID = networkManager.GetID()
-	}
+	validatorID := networkManager.GetID()
 
 	timeSync := &TimeSync{
 		externalSources: make(map[string]bool),
@@ -97,14 +98,6 @@ func NewTimeSync(networkManager NetworkManager) *TimeSync {
 
 	log.Debug("NewTimeSync: Time synchronization service created")
 	return timeSync
-}
-
-// generateValidatorID creates a simple ID for this validator
-func generateValidatorID() string {
-	// TODO: In a real implementation, this would be based on a public key
-	id := fmt.Sprintf("validator-%d", time.Now().UnixNano()%1000)
-	log.WithField("id", id).Debug("generateValidatorID: Generated validator ID")
-	return id
 }
 
 // Start begins the time synchronization service

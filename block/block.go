@@ -54,7 +54,7 @@ func (block *Block) CalculateHash() []byte {
 func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
 	log.WithField("validator", creatorAccount.Address).Info("Creating genesis block")
 
-	currentTime := time.Now().Unix()
+	currentTime := time.Now().UnixNano()
 	log.WithField("timestamp", currentTime).Debug("Setting genesis block timestamp")
 
 	genesisBlock := &Block{

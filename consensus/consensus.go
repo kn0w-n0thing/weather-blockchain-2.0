@@ -156,7 +156,7 @@ func (ce *Engine) createNewBlock(message string) {
 	}).Debug("Retrieved latest block for building new block")
 
 	// Current time as Unix timestamp
-	timestamp := ce.timeSync.GetNetworkTime().Unix()
+	timestamp := ce.timeSync.GetNetworkTime().UnixNano()
 	log.WithField("timestamp", timestamp).Debug("Using current network time for block")
 
 	// Create new block
@@ -273,7 +273,7 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 	defer ce.mutex.Unlock()
 
 	// First verify the block timestamp is valid
-	blockTime := time.Unix(block.Timestamp, 0)
+	blockTime := time.Unix(0, block.Timestamp)
 	log.WithFields(logger.Fields{
 		"blockTime":   blockTime,
 		"networkTime": ce.timeSync.GetNetworkTime(),

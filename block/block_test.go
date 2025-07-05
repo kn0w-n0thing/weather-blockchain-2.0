@@ -80,8 +80,9 @@ func TestCreateGenesisBlock(t *testing.T) {
 	assert.True(t, isValid, "Genesis block signature should be valid")
 
 	// Ensure the timestamp is reasonable (within 5 seconds of now)
-	now := time.Now().Unix()
-	assert.InDelta(t, now, genesisBlock.Timestamp, 5, "Genesis block timestamp should be close to now")
+	now := time.Now().UnixNano()
+	diff := now - genesisBlock.Timestamp
+	assert.True(t, diff >= 0 && diff < 5*time.Second.Nanoseconds(), "Genesis block timestamp should be within 5 seconds of now")
 }
 
 func TestBlockFieldsAffectHash(t *testing.T) {
@@ -255,31 +256,31 @@ func TestBlockSign(t *testing.T) {
 
 	// Calculate and store hash
 	testBlock.StoreHash()
-	
+
 	// Create a test private key
 	testPrivateKey := "test-private-key-12345"
-	
+
 	// Sign the block
 	testBlock.Sign(testPrivateKey)
-	
+
 	// Verify signature is not empty
 	assert.NotEmpty(t, testBlock.Signature, "Block signature should not be empty after signing")
-	
+
 	// Verify signature format - since our implementation creates a signature with a specific format
 	signatureStr := string(testBlock.Signature)
 	expectedPrefix := "signed-" + testBlock.Hash
-	assert.True(t, len(signatureStr) > len(expectedPrefix), 
+	assert.True(t, len(signatureStr) > len(expectedPrefix),
 		"Signature should be longer than the prefix")
-	assert.Equal(t, expectedPrefix, signatureStr[:len(expectedPrefix)], 
+	assert.Equal(t, expectedPrefix, signatureStr[:len(expectedPrefix)],
 		"Signature should start with the expected prefix")
-	
+
 	// Verify that signature includes the private key (our implementation includes this)
-	assert.Contains(t, signatureStr, testPrivateKey, 
+	assert.Contains(t, signatureStr, testPrivateKey,
 		"Signature should contain the private key")
-	
+
 	// Verify full signature format
 	expectedSignature := fmt.Sprintf("signed-%s-with-%s", testBlock.Hash, testPrivateKey)
-	assert.Equal(t, expectedSignature, signatureStr, 
+	assert.Equal(t, expectedSignature, signatureStr,
 		"Signature should match the expected format")
 }
 
@@ -292,32 +293,32 @@ func TestBlockVerifySignature(t *testing.T) {
 		ValidatorAddress: "testaddress123",
 		Data:             "Test Data",
 	}
-	
+
 	// Calculate and store hash
 	testBlock.StoreHash()
-	
+
 	// Create a test private key
 	testPrivateKey := "test-private-key-12345"
-	
+
 	// Sign the block
 	testBlock.Sign(testPrivateKey)
-	
+
 	// Verify signature with VerifySignature method
 	isValid := testBlock.VerifySignature()
 	assert.True(t, isValid, "Signature verification should pass for a correctly signed block")
-	
+
 	// Tamper with the hash and verify signature fails
 	originalHash := testBlock.Hash
 	testBlock.Hash = "tampered-hash"
 	isValidAfterTamper := testBlock.VerifySignature()
 	assert.False(t, isValidAfterTamper, "Signature verification should fail when hash is tampered")
-	
+
 	// Restore original hash and tamper with signature
 	testBlock.Hash = originalHash
 	testBlock.Signature = []byte("invalid-signature")
 	isValidWithTamperedSignature := testBlock.VerifySignature()
 	assert.False(t, isValidWithTamperedSignature, "Signature verification should fail with tampered signature")
-	
+
 	// Test with empty signature
 	testBlock.Signature = []byte{}
 	isValidWithEmptySignature := testBlock.VerifySignature()
@@ -334,35 +335,35 @@ func TestSignAndVerifyConsistency(t *testing.T) {
 			ValidatorAddress: "testaddress123",
 			Data:             "Test Data",
 		}
-		
+
 		block.StoreHash()
 		block.Sign(privateKey)
-		
+
 		isValid := block.VerifySignature()
 		assert.True(t, isValid, "Signature verification should pass with key: %s", privateKey)
-		
+
 		// Changing any field should invalidate the signature
 		originalData := block.Data
 		block.Data = "Modified Data"
 		block.StoreHash() // Recalculate hash after modifying data
-		
+
 		isValidAfterModification := block.VerifySignature()
-		assert.False(t, isValidAfterModification, 
+		assert.False(t, isValidAfterModification,
 			"Signature should be invalid after block content is modified")
-		
+
 		// Restore original data but don't update hash
 		block.Data = originalData
 		isValidAfterRestoring := block.VerifySignature()
-		assert.False(t, isValidAfterRestoring, 
+		assert.False(t, isValidAfterRestoring,
 			"Signature should still be invalid because hash wasn't updated")
-		
+
 		// Update hash and verify signature is valid again
 		block.StoreHash()
 		isValidAfterUpdatingHash := block.VerifySignature()
-		assert.True(t, isValidAfterUpdatingHash, 
+		assert.True(t, isValidAfterUpdatingHash,
 			"Signature should be valid after restoring original data and updating hash")
 	}
-	
+
 	// Test with different private keys
 	createAndVerifyBlock("private-key-1")
 	createAndVerifyBlock("another-private-key-2")
