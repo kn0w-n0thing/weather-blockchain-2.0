@@ -1,6 +1,7 @@
 package consensus
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -8,6 +9,7 @@ import (
 	"weather-blockchain/block"
 	"weather-blockchain/logger"
 	"weather-blockchain/network"
+	"weather-blockchain/weather"
 )
 
 var log = logger.Logger
@@ -27,12 +29,19 @@ type ValidatorSelection interface {
 	GetValidatorForSlot(slot uint64) string
 }
 
+// WeatherService defines the interface needed for weather data
+type WeatherService interface {
+	GetLatestWeatherData() (*weather.Data, error)
+}
+
+
 // Engine manages the PoS consensus mechanism
 type Engine struct {
 	blockchain          *block.Blockchain
 	timeSync            TimeSync
 	validatorSelection  ValidatorSelection
 	networkBroadcaster  network.Broadcaster
+	weatherService      WeatherService
 	validatorID         string
 	validatorPublicKey  []byte
 	validatorPrivateKey []byte                    // In production, use proper key management
@@ -43,7 +52,7 @@ type Engine struct {
 
 // NewConsensusEngine creates a new consensus engine
 func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validatorSelection ValidatorSelection,
-	networkBroadcaster network.Broadcaster, validatorID string, pubKey []byte, private []byte) *Engine {
+	networkBroadcaster network.Broadcaster, weatherService WeatherService, validatorID string, pubKey []byte, private []byte) *Engine {
 
 	log.WithFields(logger.Fields{
 		"validatorID": validatorID,
@@ -55,6 +64,7 @@ func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validat
 		timeSync:            timeSync,
 		validatorSelection:  validatorSelection,
 		networkBroadcaster:  networkBroadcaster,
+		weatherService:      weatherService,
 		validatorID:         validatorID,
 		validatorPublicKey:  pubKey,
 		validatorPrivateKey: private,
@@ -167,15 +177,37 @@ func (ce *Engine) createNewBlock(message string) {
 		"validator": ce.validatorID,
 	}).Debug("Assembling new block")
 
-	// TODO: Consider adding more structured data format and metadata tracking
-	timestampStr := time.Unix(timestamp, 0).Format("2006-01-02 15:04:05")
-	dataWithTimestamp := fmt.Sprintf("%s - Modified at: %s", message, timestampStr)
+	// Get latest weather data and include it in the block
+	var blockData string
+	if ce.weatherService != nil {
+		weatherData, err := ce.weatherService.GetLatestWeatherData()
+		if err != nil {
+			log.WithError(err).Warn("Failed to fetch weather data for block, using fallback")
+			timestampStr := time.Unix(0, timestamp).Format("2006-01-02 15:04:05")
+			blockData = fmt.Sprintf("%s - Modified at: %s", message, timestampStr)
+		} else {
+			// Convert weather data to JSON and include in block
+			weatherJSON, jsonErr := json.Marshal(weatherData)
+			if jsonErr != nil {
+				log.WithError(jsonErr).Warn("Failed to marshal weather data, using fallback")
+				timestampStr := time.Unix(0, timestamp).Format("2006-01-02 15:04:05")
+				blockData = fmt.Sprintf("%s - Modified at: %s", message, timestampStr)
+			} else {
+				timestampStr := time.Unix(0, timestamp).Format("2006-01-02 15:04:05")
+				blockData = fmt.Sprintf("%s - Modified at: %s - Weather: %s", message, timestampStr, string(weatherJSON))
+				log.WithField("weatherData", weatherData).Info("Weather data included in block")
+			}
+		}
+	} else {
+		timestampStr := time.Unix(0, timestamp).Format("2006-01-02 15:04:05")
+		blockData = fmt.Sprintf("%s - Modified at: %s", message, timestampStr)
+	}
 
 	newBlock := &block.Block{
 		Index:              newBlockIndex,
 		Timestamp:          timestamp,
 		PrevHash:           latestBlock.Hash,
-		Data:               dataWithTimestamp,
+		Data:               blockData,
 		ValidatorAddress:   ce.validatorID,
 		Signature:          []byte{},              // Will be set below
 		ValidatorPublicKey: ce.validatorPublicKey, // Store public key

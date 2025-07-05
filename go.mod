@@ -5,6 +5,8 @@ go 1.24
 require (
 	github.com/beevik/ntp v1.4.3
 	github.com/hashicorp/mdns v1.0.6
+	github.com/joho/godotenv v1.5.1
+	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.10.0
 	github.com/urfave/cli/v2 v2.27.6
@@ -17,7 +19,6 @@ require (
 	github.com/miekg/dns v1.1.55 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/net v0.35.0 // indirect

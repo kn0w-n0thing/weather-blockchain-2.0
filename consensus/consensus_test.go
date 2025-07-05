@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 	"weather-blockchain/block"
+	"weather-blockchain/weather"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,42 @@ type MockBroadcaster struct {
 	blockRequests     []uint64
 	rangeRequests     []struct{ start, end uint64 }
 	peers             map[string]string
+}
+
+// MockWeatherService mocks the weather service for testing
+type MockWeatherService struct {
+	weatherData *weather.Data
+	shouldError bool
+}
+
+// GetLatestWeatherData returns mock weather data
+func (m *MockWeatherService) GetLatestWeatherData() (*weather.Data, error) {
+	if m.shouldError {
+		return nil, fmt.Errorf("mock weather service error")
+	}
+	if m.weatherData == nil {
+		return &weather.Data{
+			Source:    "mock",
+			City:      "TestCity",
+			Condition: "sunny",
+			ID:        "0",
+			Temp:      25.0,
+			RTemp:     26.0,
+			WSpeed:    5.0,
+			WDir:      180,
+			Hum:       60,
+			Timestamp: time.Now().UnixNano(),
+		}, nil
+	}
+	return m.weatherData, nil
+}
+
+// NewMockWeatherService creates a new mock weather service for testing
+func NewMockWeatherService() *MockWeatherService {
+	return &MockWeatherService{
+		weatherData: nil,
+		shouldError: false,
+	}
 }
 
 func (m *MockBroadcaster) BroadcastBlock(b *block.Block) {
@@ -83,7 +120,6 @@ func NewMockBroadcaster() *MockBroadcaster {
 func (m *MockTimeSync) GetNetworkTime() time.Time {
 	return m.currentTime
 }
-
 
 // GetCurrentSlot returns mock current slot
 func (m *MockTimeSync) GetCurrentSlot() uint64 {
@@ -143,9 +179,10 @@ func TestConsensusEngine_Init(t *testing.T) {
 	mockTimeSync := NewMockTimeSync()
 	mockValidatorSelection := NewMockValidatorSelection()
 	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Check initialization
 	assert.Equal(t, bc, ce.blockchain, "Blockchain should be properly initialized")
@@ -179,9 +216,10 @@ func TestConsensusEngine_ReceiveBlock(t *testing.T) {
 	mockTimeSync := NewMockTimeSync()
 	mockValidatorSelection := NewMockValidatorSelection()
 	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create a new valid block
 	newBlock := &block.Block{
@@ -235,9 +273,10 @@ func TestConsensusEngine_ReceiveInvalidBlock(t *testing.T) {
 	mockTimeSync.timeValidationCheck = false
 	mockValidatorSelection := NewMockValidatorSelection()
 	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create a new block with invalid timestamp
 	newBlock := &block.Block{
@@ -289,9 +328,10 @@ func TestConsensusEngine_ForkResolution(t *testing.T) {
 	mockTimeSync := NewMockTimeSync()
 	mockValidatorSelection := NewMockValidatorSelection()
 	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create block 1 in main chain
 	block1 := &block.Block{
@@ -369,7 +409,7 @@ func TestConsensusEngine_ForkResolution(t *testing.T) {
 	assert.NotNil(t, addedBlock2, "Block 2 should be added to blockchain")
 	assert.Len(t, bc.Blocks, 3, "Blockchain should have 3 blocks (genesis + block1 + block2)")
 
-	// Verify the fork resolution behavior - since the current implementation 
+	// Verify the fork resolution behavior - since the current implementation
 	// in TryAddBlockWithForkResolution only allows extending the longest chain,
 	// the earlier fork1 should still be in pending blocks if it couldn't be placed
 
@@ -409,9 +449,10 @@ func TestConsensusEngine_CreateBlock(t *testing.T) {
 	mockValidatorSelection := NewMockValidatorSelection()
 	mockValidatorSelection.isValidator = true
 	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Call createNewBlock directly
 	ce.createNewBlock("Test Message")
@@ -454,9 +495,10 @@ func TestConsensusEngine_ProcessPendingBlocks(t *testing.T) {
 	mockTimeSync := NewMockTimeSync()
 	mockValidatorSelection := NewMockValidatorSelection()
 	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create pendingBlock 2 that references a non-existent pendingBlock 1
 	futureBlock := &block.Block{
@@ -563,13 +605,14 @@ func TestConsensusEngine_RequestMissingBlocks(t *testing.T) {
 	mockTimeSync := NewMockTimeSync()
 	mockValidatorSelection := NewMockValidatorSelection()
 	mockBroadcaster := NewMockBroadcaster()
-	
+	mockWeatherService := NewMockWeatherService()
+
 	// Add some peers to the mock broadcaster
 	mockBroadcaster.peers["peer1"] = "192.168.1.10:18790"
 	mockBroadcaster.peers["peer2"] = "192.168.1.11:18790"
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create a future block that would create a gap (block index 5 when we only have 0)
 	futureBlock := &block.Block{
@@ -628,10 +671,11 @@ func TestConsensusEngine_RequestMissingBlocks_NoPeers(t *testing.T) {
 	mockTimeSync := NewMockTimeSync()
 	mockValidatorSelection := NewMockValidatorSelection()
 	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
 	// Note: No peers added to mockBroadcaster
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create a future block that would create a gap
 	futureBlock := &block.Block{
@@ -684,14 +728,15 @@ func TestConsensusEngine_RequestBlockRangeViaNetworkBroadcaster(t *testing.T) {
 	mockTimeSync := NewMockTimeSync()
 	mockValidatorSelection := NewMockValidatorSelection()
 	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Test block range request
 	startIndex := uint64(1)
 	endIndex := uint64(5)
-	
+
 	ce.requestBlockRangeViaNetworkBroadcaster(startIndex, endIndex)
 
 	// Verify that range request was sent
@@ -742,10 +787,11 @@ func TestConsensusEngine_GapDetectionInReceiveBlock(t *testing.T) {
 	mockTimeSync := NewMockTimeSync()
 	mockValidatorSelection := NewMockValidatorSelection()
 	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
 	mockBroadcaster.peers["peer1"] = "192.168.1.10:18790"
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Test 1: Valid next block (should not trigger sync)
 	block2 := &block.Block{
@@ -763,7 +809,7 @@ func TestConsensusEngine_GapDetectionInReceiveBlock(t *testing.T) {
 
 	err = ce.ReceiveBlock(block2)
 	assert.NoError(t, err, "Valid next block should be processed without error")
-	
+
 	// Should not trigger sync for valid block
 	assert.Len(t, mockBroadcaster.rangeRequests, 0, "Valid block should not trigger sync")
 

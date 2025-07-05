@@ -14,6 +14,7 @@ import (
 	"weather-blockchain/consensus"
 	"weather-blockchain/logger"
 	"weather-blockchain/network"
+	"weather-blockchain/weather"
 )
 
 const (
@@ -44,10 +45,14 @@ type Services struct {
 	ConsensusEngine    *consensus.Engine
 	Blockchain         *block.Blockchain
 	Account           *account.Account
+	WeatherService     *weather.Service
 }
 
 // Shutdown gracefully shuts down all services
 func (s *Services) Shutdown() {
+	if s.WeatherService != nil {
+		s.WeatherService.Stop()
+	}
 	if s.Node != nil {
 		s.Node.Stop()
 	}
@@ -267,8 +272,21 @@ func startServices(config *Config, acc *account.Account, blockchain *block.Block
 	validatorSelection.Start()
 	services.ValidatorSelection = validatorSelection
 
+	// Start weather service
+	weatherService, err := weather.NewWeatherService()
+	if err != nil {
+		node.Stop() // Cleanup on failure
+		return nil, fmt.Errorf("failed to create weather service: %w", err)
+	}
+	
+	if err := weatherService.Start(); err != nil {
+		node.Stop() // Cleanup on failure
+		return nil, fmt.Errorf("failed to start weather service: %w", err)
+	}
+	services.WeatherService = weatherService
+
 	// Start consensus engine
-	consensusEngine, err := createConsensusEngine(blockchain, timeSync, validatorSelection, node, acc)
+	consensusEngine, err := createConsensusEngine(blockchain, timeSync, validatorSelection, node, weatherService, acc)
 	if err != nil {
 		node.Stop() // Cleanup on failure
 		return nil, fmt.Errorf("failed to create consensus engine: %w", err)
@@ -289,7 +307,7 @@ func startServices(config *Config, acc *account.Account, blockchain *block.Block
 
 // createConsensusEngine creates a consensus engine with proper key marshalling
 func createConsensusEngine(blockchain *block.Blockchain, timeSync *network.TimeSync, 
-	validatorSelection *network.ValidatorSelection, node *network.Node, acc *account.Account) (*consensus.Engine, error) {
+	validatorSelection *network.ValidatorSelection, node *network.Node, weatherService *weather.Service, acc *account.Account) (*consensus.Engine, error) {
 	
 	privateKey, err := x509.MarshalECPrivateKey(acc.PrivateKey)
 	if err != nil {
@@ -303,7 +321,7 @@ func createConsensusEngine(blockchain *block.Blockchain, timeSync *network.TimeS
 
 	consensusEngine := consensus.NewConsensusEngine(
 		blockchain, timeSync, validatorSelection, node, 
-		node.ID, publicKey, privateKey,
+		weatherService, node.ID, publicKey, privateKey,
 	)
 
 	return consensusEngine, nil
