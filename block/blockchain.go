@@ -15,12 +15,20 @@ const (
 	ChainFile     = "blockchain.json"
 )
 
-// Blockchain represents the blockchain data structure
+// Blockchain represents the tree-based blockchain data structure
 type Blockchain struct {
+	// Tree structure for handling forks
+	Genesis     *Block
+	BlockByHash map[string]*Block
+	Heads       []*Block // All chain tips
+	MainHead    *Block   // Current longest chain head
+	
+	// Legacy support - will be deprecated
 	Blocks     []*Block
 	LatestHash string
-	mutex      sync.RWMutex
-	dataPath   string
+	
+	mutex    sync.RWMutex
+	dataPath string
 }
 
 func (blockchain *Blockchain) GetBlockCount() int {
@@ -43,28 +51,36 @@ func NewBlockchain(dataPath ...string) *Blockchain {
 	}
 
 	blockchain := &Blockchain{
+		// Tree structure
+		Genesis:     nil,
+		BlockByHash: make(map[string]*Block),
+		Heads:       make([]*Block, 0),
+		MainHead:    nil,
+		
+		// Legacy support
 		Blocks:     make([]*Block, 0),
 		LatestHash: "",
-		dataPath:   path,
+		
+		dataPath: path,
 	}
 
-	log.Info("New blockchain instance created")
+	log.Info("New tree-based blockchain instance created")
 	return blockchain
 }
 
-// AddBlock adds a new block to the blockchain
+// AddBlock adds a new block to the tree-based blockchain
 func (blockchain *Blockchain) AddBlock(block *Block) error {
 	log.WithFields(logger.Fields{
 		"blockIndex":         block.Index,
 		"blockValidatorAddr": block.ValidatorAddress,
 		"timestamp":          block.Timestamp,
-	}).Debug("Adding block to blockchain")
+	}).Debug("Adding block to tree-based blockchain")
 
 	blockchain.mutex.Lock()
 	defer blockchain.mutex.Unlock()
 
 	// If it's the genesis block
-	if len(blockchain.Blocks) == 0 {
+	if blockchain.Genesis == nil {
 		log.Debug("Adding genesis block to empty blockchain")
 
 		// Verify the block is actually a genesis block
@@ -77,21 +93,33 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 			return errors.New("invalid genesis block")
 		}
 
+		// Initialize tree structure properly
+		if block.Children == nil {
+			block.Children = make([]*Block, 0)
+		}
+		block.Parent = nil
+
 		// Store hash in the block
 		block.StoreHash()
 
-		// Add the genesis block
+		// Set as genesis and main head
+		blockchain.Genesis = block
+		blockchain.MainHead = block
+		blockchain.BlockByHash[block.Hash] = block
+		blockchain.Heads = []*Block{block}
+		
+		// Legacy support
 		blockchain.Blocks = append(blockchain.Blocks, block)
 		blockchain.LatestHash = block.Hash
 
 		log.WithFields(logger.Fields{
-			"blockHash":   block.Hash,
-			"chainLength": len(blockchain.Blocks),
-		}).Info("Genesis block added to blockchain")
+			"blockHash": block.Hash,
+			"genesis":   true,
+		}).Info("Genesis block added to tree-based blockchain")
 		return nil
 	}
 
-	// For non-genesis blocks, just do basic validation
+	// For non-genesis blocks, validate and add to tree
 	log.WithField("blockIndex", block.Index).Debug("Validating non-genesis block")
 	err := blockchain.validateBlock(block)
 	if err != nil {
@@ -102,18 +130,50 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 		return err
 	}
 
+	// Find parent block
+	parentBlock := blockchain.BlockByHash[block.PrevHash]
+	if parentBlock == nil {
+		log.WithFields(logger.Fields{
+			"blockIndex":    block.Index,
+			"blockPrevHash": block.PrevHash,
+		}).Error("Parent block not found")
+		return errors.New("parent block not found")
+	}
+
+	// Initialize children slice if needed
+	if block.Children == nil {
+		block.Children = make([]*Block, 0)
+	}
+
 	// Store hash in the block
 	block.StoreHash()
 
-	// Add the block to the chain
+	// Add to tree structure
+	parentBlock.AddChild(block)
+	blockchain.BlockByHash[block.Hash] = block
+
+	// Update heads - remove parent if it was a head, add this block as new head
+	blockchain.updateHeads(block)
+
+	// Update main head if this creates a longer chain
+	if blockchain.isLongerChain(block) {
+		blockchain.MainHead = block
+		log.WithFields(logger.Fields{
+			"newMainHead": block.Hash,
+			"newHeight":   block.Index,
+		}).Info("Updated main head to longer chain")
+	}
+
+	// Legacy support - add to blocks array for backward compatibility
 	blockchain.Blocks = append(blockchain.Blocks, block)
-	blockchain.LatestHash = block.Hash
+	blockchain.LatestHash = blockchain.MainHead.Hash
 
 	log.WithFields(logger.Fields{
 		"blockIndex":  block.Index,
 		"blockHash":   block.Hash,
-		"chainLength": len(blockchain.Blocks),
-	}).Info("Block added to blockchain")
+		"parentHash":  parentBlock.Hash,
+		"headsCount":  len(blockchain.Heads),
+	}).Info("Block added to tree-based blockchain")
 	return nil
 }
 
@@ -193,77 +253,99 @@ func (blockchain *Blockchain) CanAddDirectly(block *Block) error {
 	return blockchain.validateBlockForChain(block, latestBlock)
 }
 
-// TryAddBlockWithForkResolution attempts to add a block, handling forks if necessary
+// TryAddBlockWithForkResolution attempts to add a block, handling forks using tree structure
 func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error {
 	log.WithFields(logger.Fields{
 		"blockIndex": block.Index,
 		"blockHash":  block.Hash,
-	}).Debug("Trying to add block with fork resolution")
+	}).Debug("Trying to add block with tree-based fork resolution")
 
-	// Try direct addition first
-	err := blockchain.CanAddDirectly(block)
-	if err == nil {
-		// Can add directly to current chain
-		return blockchain.AddBlock(block)
-	}
+	blockchain.mutex.Lock()
+	defer blockchain.mutex.Unlock()
 
-	log.WithFields(logger.Fields{
-		"blockIndex": block.Index,
-		"error":      err.Error(),
-	}).Debug("Cannot add block directly, checking for fork resolution")
-
-	// Check if this block references a known previous block (fork scenario)
-	blockchain.mutex.RLock()
-	prevBlock := blockchain.GetBlockByHash(block.PrevHash)
-	blockchain.mutex.RUnlock()
-
-	if prevBlock == nil {
-		log.WithFields(logger.Fields{
-			"blockIndex":    block.Index,
-			"blockPrevHash": block.PrevHash,
-		}).Debug("Previous block not found, cannot place block")
-		return errors.New("previous block not found")
-	}
-
-	// Validate the block can extend from the found previous block
-	if err := blockchain.validateBlockForChain(block, prevBlock); err != nil {
-		log.WithFields(logger.Fields{
-			"blockIndex": block.Index,
-			"error":      err.Error(),
-		}).Debug("Block cannot extend from found previous block")
+	// Basic validation first
+	if err := blockchain.validateBlock(block); err != nil {
 		return err
 	}
 
-	// This is a valid fork - for now, we'll use longest chain rule
-	// If the new block would create a longer chain, we should reorganize
-	blockchain.mutex.RLock()
-	currentHeight := uint64(len(blockchain.Blocks))
-	newChainHeight := block.Index + 1
-	blockchain.mutex.RUnlock()
+	// Check if we already have this block
+	if existingBlock := blockchain.BlockByHash[block.Hash]; existingBlock != nil {
+		log.WithField("blockHash", block.Hash).Debug("Block already exists in tree")
+		return nil
+	}
 
-	log.WithFields(logger.Fields{
-		"currentHeight":  currentHeight,
-		"newChainHeight": newChainHeight,
-		"blockIndex":     block.Index,
-	}).Debug("Comparing chain heights for fork resolution")
-
-	if newChainHeight > currentHeight {
+	// Find parent block in the tree
+	parentBlock := blockchain.BlockByHash[block.PrevHash]
+	if parentBlock == nil {
 		log.WithFields(logger.Fields{
-			"blockIndex":     block.Index,
-			"currentHeight":  currentHeight,
-			"newChainHeight": newChainHeight,
-		}).Info("New block creates longer chain, reorganizing blockchain")
+			"blockIndex":    block.Index,
+			"blockPrevHash": block.PrevHash,
+		}).Debug("Parent block not found in tree")
+		return errors.New("previous block not found")
+	}
 
-		// Reorganize the blockchain to accept the longer chain
-		return blockchain.reorganizeChain(block)
+	// Validate the block can extend from the parent
+	if err := blockchain.validateBlockForChain(block, parentBlock); err != nil {
+		log.WithFields(logger.Fields{
+			"blockIndex": block.Index,
+			"error":      err.Error(),
+		}).Debug("Block cannot extend from parent block")
+		return err
+	}
+
+	// Initialize children slice if needed
+	if block.Children == nil {
+		block.Children = make([]*Block, 0)
+	}
+
+	// Store hash in the block
+	block.StoreHash()
+
+	// Add to tree structure
+	parentBlock.AddChild(block)
+	blockchain.BlockByHash[block.Hash] = block
+
+	// Update heads - remove parent if it was a head, add this block as new head
+	blockchain.updateHeads(block)
+
+	// Check if this creates a longer chain
+	if blockchain.isLongerChain(block) {
+		log.WithFields(logger.Fields{
+			"newMainHead": block.Hash,
+			"newHeight":   block.Index,
+			"oldHeight":   blockchain.MainHead.Index,
+		}).Info("New block creates longer chain, switching main head")
+		
+		// Switch to the new longer chain
+		blockchain.MainHead = block
+		
+		// Update legacy blocks array to represent the new main chain
+		newMainChain := block.GetPath()
+		blockchain.Blocks = newMainChain
+		blockchain.LatestHash = block.Hash
 	} else {
 		log.WithFields(logger.Fields{
-			"blockIndex":     block.Index,
-			"currentHeight":  currentHeight,
-			"newChainHeight": newChainHeight,
-		}).Debug("New block does not create longer chain, keeping current chain")
-		return errors.New("block creates shorter or equal chain")
+			"blockIndex":   block.Index,
+			"currentHeight": blockchain.MainHead.Index,
+			"blockHeight":   block.Index,
+		}).Debug("Block creates fork but not longer chain, added to tree")
+		
+		// Still add to legacy blocks for backward compatibility if it's extending the main chain
+		if parentBlock == blockchain.MainHead {
+			blockchain.Blocks = append(blockchain.Blocks, block)
+			blockchain.LatestHash = block.Hash
+		}
 	}
+
+	log.WithFields(logger.Fields{
+		"blockIndex":  block.Index,
+		"blockHash":   block.Hash,
+		"parentHash":  parentBlock.Hash,
+		"headsCount":  len(blockchain.Heads),
+		"forkCount":   len(blockchain.Heads),
+	}).Info("Block added to tree-based blockchain with fork resolution")
+	
+	return nil
 }
 
 // reorganizeChain reorganizes the blockchain to accept a longer chain
@@ -490,8 +572,25 @@ func (blockchain *Blockchain) SaveToDisk() error {
 		return errors.New("failed to create data directory: " + err.Error())
 	}
 
+	// Create serializable blocks without tree structure references
+	serializableBlocks := make([]*Block, len(blockchain.Blocks))
+	for i, block := range blockchain.Blocks {
+		// Create a copy without Parent and Children fields
+		serializableBlocks[i] = &Block{
+			Index:              block.Index,
+			Timestamp:          block.Timestamp,
+			PrevHash:           block.PrevHash,
+			ValidatorAddress:   block.ValidatorAddress,
+			Data:               block.Data,
+			Signature:          block.Signature,
+			ValidatorPublicKey: block.ValidatorPublicKey,
+			Hash:               block.Hash,
+			// Explicitly omit Parent and Children to avoid circular references
+		}
+	}
+
 	// Marshal blockchain data to JSON
-	data, err := json.MarshalIndent(blockchain.Blocks, "", "  ")
+	data, err := json.MarshalIndent(serializableBlocks, "", "  ")
 	if err != nil {
 		log.WithError(err).Error("Failed to marshal blockchain data to JSON")
 		return errors.New("failed to marshal blockchain data: " + err.Error())
@@ -613,14 +712,61 @@ func (blockchain *Blockchain) LoadFromDisk() error {
 			}
 		}
 
-		// Set blocks and latest hash
+		// Initialize tree structure fields for loaded blocks
+		for _, block := range blocks {
+			if block.Children == nil {
+				block.Children = make([]*Block, 0)
+			}
+			block.Parent = nil // Will be set below
+		}
+
+		// Rebuild tree structure and hash map
+		blockchain.BlockByHash = make(map[string]*Block)
+		blockchain.Heads = make([]*Block, 0)
+		
+		// Set genesis
+		if len(blocks) > 0 {
+			blockchain.Genesis = blocks[0]
+			blockchain.BlockByHash[blocks[0].Hash] = blocks[0]
+		}
+
+		// Rebuild parent-child relationships
+		for i := 1; i < len(blocks); i++ {
+			currentBlock := blocks[i]
+			blockchain.BlockByHash[currentBlock.Hash] = currentBlock
+			
+			// Find parent block by previous hash
+			for j := i - 1; j >= 0; j-- {
+				if blocks[j].Hash == currentBlock.PrevHash {
+					// Set parent-child relationship
+					currentBlock.Parent = blocks[j]
+					blocks[j].AddChild(currentBlock)
+					break
+				}
+			}
+		}
+
+		// Find heads (blocks with no children)
+		for _, block := range blocks {
+			if len(block.Children) == 0 {
+				blockchain.Heads = append(blockchain.Heads, block)
+			}
+		}
+
+		// Set main head to the last block in the loaded chain (longest path)
+		if len(blocks) > 0 {
+			blockchain.MainHead = blocks[len(blocks)-1]
+		}
+
+		// Set legacy fields
 		blockchain.Blocks = blocks
 		blockchain.LatestHash = blocks[len(blocks)-1].Hash
 
 		log.WithFields(logger.Fields{
 			"blockCount": len(blocks),
 			"latestHash": blockchain.LatestHash,
-		}).Info("Blockchain successfully loaded from disk")
+			"headsCount": len(blockchain.Heads),
+		}).Info("Blockchain successfully loaded from disk with tree structure rebuilt")
 	} else {
 		log.Warn("Loaded blockchain file contains no blocks")
 	}
@@ -753,8 +899,56 @@ func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
 				}
 			}
 
-			// Set blockchain data
+			// Initialize tree structure fields for loaded blocks
+			for _, block := range blocks {
+				if block.Children == nil {
+					block.Children = make([]*Block, 0)
+				}
+				block.Parent = nil // Will be set below
+			}
+
+			// Set blockchain data with tree structure rebuild
 			blockchain.mutex.Lock()
+			
+			// Rebuild tree structure and hash map
+			blockchain.BlockByHash = make(map[string]*Block)
+			blockchain.Heads = make([]*Block, 0)
+			
+			// Set genesis
+			if len(blocks) > 0 {
+				blockchain.Genesis = blocks[0]
+				blockchain.BlockByHash[blocks[0].Hash] = blocks[0]
+			}
+
+			// Rebuild parent-child relationships
+			for i := 1; i < len(blocks); i++ {
+				currentBlock := blocks[i]
+				blockchain.BlockByHash[currentBlock.Hash] = currentBlock
+				
+				// Find parent block by previous hash
+				for j := i - 1; j >= 0; j-- {
+					if blocks[j].Hash == currentBlock.PrevHash {
+						// Set parent-child relationship
+						currentBlock.Parent = blocks[j]
+						blocks[j].AddChild(currentBlock)
+						break
+					}
+				}
+			}
+
+			// Find heads (blocks with no children)
+			for _, block := range blocks {
+				if len(block.Children) == 0 {
+					blockchain.Heads = append(blockchain.Heads, block)
+				}
+			}
+
+			// Set main head to the last block in the loaded chain (longest path)
+			if len(blocks) > 0 {
+				blockchain.MainHead = blocks[len(blocks)-1]
+			}
+
+			// Set legacy fields
 			blockchain.Blocks = blocks
 			blockchain.LatestHash = blocks[len(blocks)-1].Hash
 			blockchain.mutex.Unlock()
@@ -762,7 +956,8 @@ func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
 			log.WithFields(logger.Fields{
 				"blockCount": len(blocks),
 				"latestHash": blockchain.LatestHash,
-			}).Info("Blockchain successfully loaded from custom file")
+				"headsCount": len(blockchain.Heads),
+			}).Info("Blockchain successfully loaded from custom file with tree structure rebuilt")
 		} else {
 			log.Warn("Loaded blockchain file contains no blocks")
 		}
@@ -776,4 +971,135 @@ func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
 	}
 
 	return blockchain, nil
+}
+
+// Tree-specific methods for fork handling
+
+// updateHeads updates the heads list when a new block is added
+func (blockchain *Blockchain) updateHeads(newBlock *Block) {
+	log.WithFields(logger.Fields{
+		"newBlockIndex": newBlock.Index,
+		"newBlockHash":  newBlock.Hash,
+		"parentHash":    newBlock.PrevHash,
+	}).Debug("Updating blockchain heads")
+
+	// Remove parent from heads if it exists
+	for i, head := range blockchain.Heads {
+		if head.Hash == newBlock.PrevHash {
+			// Remove this head as it's no longer a tip
+			blockchain.Heads = append(blockchain.Heads[:i], blockchain.Heads[i+1:]...)
+			log.WithField("removedHead", head.Hash).Debug("Removed parent from heads")
+			break
+		}
+	}
+
+	// Add new block as a head
+	blockchain.Heads = append(blockchain.Heads, newBlock)
+	
+	log.WithFields(logger.Fields{
+		"newHeadHash": newBlock.Hash,
+		"headsCount":  len(blockchain.Heads),
+	}).Debug("Added new block as head")
+}
+
+// isLongerChain checks if the given block creates a longer chain than current main head
+func (blockchain *Blockchain) isLongerChain(block *Block) bool {
+	if blockchain.MainHead == nil {
+		return true
+	}
+	
+	return block.Index > blockchain.MainHead.Index
+}
+
+// GetLongestChain returns the longest chain in the tree
+func (blockchain *Blockchain) GetLongestChain() []*Block {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
+
+	if blockchain.MainHead == nil {
+		return []*Block{}
+	}
+
+	return blockchain.MainHead.GetPath()
+}
+
+// GetAllHeads returns all current chain heads (tips)
+func (blockchain *Blockchain) GetAllHeads() []*Block {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
+
+	heads := make([]*Block, len(blockchain.Heads))
+	copy(heads, blockchain.Heads)
+	return heads
+}
+
+// GetForkCount returns the number of active forks
+func (blockchain *Blockchain) GetForkCount() int {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
+
+	return len(blockchain.Heads)
+}
+
+// FindCommonAncestor finds the common ancestor of two blocks
+func (blockchain *Blockchain) FindCommonAncestor(block1, block2 *Block) *Block {
+	// Get paths from both blocks to genesis
+	path1 := block1.GetPath()
+	path2 := block2.GetPath()
+
+	// Find the last common block in both paths
+	var commonAncestor *Block
+	maxLen := len(path1)
+	if len(path2) < maxLen {
+		maxLen = len(path2)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		if path1[i].Hash == path2[i].Hash {
+			commonAncestor = path1[i]
+		} else {
+			break
+		}
+	}
+
+	return commonAncestor
+}
+
+// SwitchToChain switches the main chain to the one ending at the given block
+func (blockchain *Blockchain) SwitchToChain(newHead *Block) error {
+	blockchain.mutex.Lock()
+	defer blockchain.mutex.Unlock()
+
+	log.WithFields(logger.Fields{
+		"newHeadHash":  newHead.Hash,
+		"newHeadIndex": newHead.Index,
+		"oldHeadHash":  blockchain.MainHead.Hash,
+		"oldHeadIndex": blockchain.MainHead.Index,
+	}).Info("Switching to new main chain")
+
+	// Update main head
+	blockchain.MainHead = newHead
+
+	// Update legacy blocks array to represent the new main chain
+	newMainChain := newHead.GetPath()
+	blockchain.Blocks = newMainChain
+	blockchain.LatestHash = newHead.Hash
+
+	log.WithFields(logger.Fields{
+		"newChainLength": len(newMainChain),
+		"newMainHead":    newHead.Hash,
+	}).Info("Successfully switched to new main chain")
+
+	return nil
+}
+
+// Tree-based GetBlockByHash that uses the hash map for O(1) lookup
+func (blockchain *Blockchain) GetBlockByHashFast(hash string) *Block {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
+
+	if block, exists := blockchain.BlockByHash[hash]; exists {
+		return block
+	}
+	return nil
 }

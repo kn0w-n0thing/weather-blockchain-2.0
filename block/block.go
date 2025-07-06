@@ -23,6 +23,10 @@ type Block struct {
 	Signature          []byte
 	ValidatorPublicKey []byte
 	Hash               string
+	
+	// Tree structure for fork handling
+	Parent   *Block
+	Children []*Block
 }
 
 func (block *Block) CalculateHash() []byte {
@@ -63,6 +67,8 @@ func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
 		PrevHash:         PrevHashOfGenesis,
 		ValidatorAddress: creatorAccount.Address,
 		Data:             "Genesis Block",
+		Parent:           nil,
+		Children:         make([]*Block, 0),
 	}
 
 	// Sign the block
@@ -145,4 +151,97 @@ func (block *Block) VerifySignature() bool {
 	}
 
 	return valid
+}
+
+// AddChild adds a child block to this block's children list
+func (block *Block) AddChild(child *Block) {
+	log.WithFields(logger.Fields{
+		"parentIndex": block.Index,
+		"parentHash":  block.Hash,
+		"childIndex":  child.Index,
+		"childHash":   child.Hash,
+	}).Debug("Adding child block")
+
+	// Set parent relationship
+	child.Parent = block
+	
+	// Add to children list
+	block.Children = append(block.Children, child)
+	
+	log.WithFields(logger.Fields{
+		"parentIndex":  block.Index,
+		"childrenCount": len(block.Children),
+	}).Debug("Child block added successfully")
+}
+
+// RemoveChild removes a child block from this block's children list
+func (block *Block) RemoveChild(child *Block) bool {
+	log.WithFields(logger.Fields{
+		"parentIndex": block.Index,
+		"childIndex":  child.Index,
+		"childHash":   child.Hash,
+	}).Debug("Removing child block")
+
+	for i, c := range block.Children {
+		if c.Hash == child.Hash {
+			// Remove the child from the slice
+			block.Children = append(block.Children[:i], block.Children[i+1:]...)
+			// Clear parent relationship
+			child.Parent = nil
+			
+			log.WithFields(logger.Fields{
+				"parentIndex":   block.Index,
+				"removedIndex":  child.Index,
+				"childrenCount": len(block.Children),
+			}).Debug("Child block removed successfully")
+			return true
+		}
+	}
+	
+	log.WithFields(logger.Fields{
+		"parentIndex": block.Index,
+		"childIndex":  child.Index,
+	}).Warn("Child block not found for removal")
+	return false
+}
+
+// GetDepth returns the depth of this block from genesis (0-indexed)
+func (block *Block) GetDepth() uint64 {
+	depth := uint64(0)
+	current := block
+	
+	for current.Parent != nil {
+		depth++
+		current = current.Parent
+	}
+	
+	return depth
+}
+
+// GetPath returns the path from genesis to this block
+func (block *Block) GetPath() []*Block {
+	path := make([]*Block, 0)
+	current := block
+	
+	// Build path in reverse order
+	for current != nil {
+		path = append([]*Block{current}, path...)
+		current = current.Parent
+	}
+	
+	return path
+}
+
+// IsAncestorOf checks if this block is an ancestor of the given block
+func (block *Block) IsAncestorOf(descendant *Block) bool {
+	current := descendant.Parent
+	
+	for current != nil {
+		if current.Hash == block.Hash {
+			return true
+		}
+		current = current.Parent
+	}
+	
+	return false
 }

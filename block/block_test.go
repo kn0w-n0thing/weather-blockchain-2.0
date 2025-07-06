@@ -369,3 +369,276 @@ func TestSignAndVerifyConsistency(t *testing.T) {
 	createAndVerifyBlock("another-private-key-2")
 	createAndVerifyBlock("third-private-key-3")
 }
+
+// Test Block tree structure methods
+
+func TestBlockAddChild(t *testing.T) {
+	// Create parent block
+	parent := &Block{
+		Index:    0,
+		Hash:     "parent-hash",
+		Children: make([]*Block, 0),
+	}
+
+	// Create child block
+	child := &Block{
+		Index:    1,
+		Hash:     "child-hash",
+		PrevHash: "parent-hash",
+		Children: make([]*Block, 0),
+	}
+
+	// Add child to parent
+	parent.AddChild(child)
+
+	// Verify parent-child relationship
+	assert.Len(t, parent.Children, 1, "Parent should have one child")
+	assert.Equal(t, child, parent.Children[0], "Child should be in parent's children list")
+	assert.Equal(t, parent, child.Parent, "Parent should be set in child")
+}
+
+func TestBlockRemoveChild(t *testing.T) {
+	// Create parent block
+	parent := &Block{
+		Index:    0,
+		Hash:     "parent-hash",
+		Children: make([]*Block, 0),
+	}
+
+	// Create two child blocks
+	child1 := &Block{
+		Index:    1,
+		Hash:     "child1-hash",
+		PrevHash: "parent-hash",
+		Children: make([]*Block, 0),
+	}
+
+	child2 := &Block{
+		Index:    1,
+		Hash:     "child2-hash",
+		PrevHash: "parent-hash",
+		Children: make([]*Block, 0),
+	}
+
+	// Add children to parent
+	parent.AddChild(child1)
+	parent.AddChild(child2)
+
+	// Verify both children are added
+	assert.Len(t, parent.Children, 2, "Parent should have two children")
+
+	// Remove first child
+	removed := parent.RemoveChild(child1)
+	assert.True(t, removed, "RemoveChild should return true")
+	assert.Len(t, parent.Children, 1, "Parent should have one child after removal")
+	assert.Equal(t, child2, parent.Children[0], "Second child should remain")
+	assert.Nil(t, child1.Parent, "Removed child's parent should be nil")
+
+	// Try to remove the same child again
+	removedAgain := parent.RemoveChild(child1)
+	assert.False(t, removedAgain, "RemoveChild should return false for non-existent child")
+
+	// Remove second child
+	removed2 := parent.RemoveChild(child2)
+	assert.True(t, removed2, "RemoveChild should return true")
+	assert.Len(t, parent.Children, 0, "Parent should have no children after removing all")
+}
+
+func TestBlockGetDepth(t *testing.T) {
+	// Create a chain: genesis -> block1 -> block2 -> block3
+	genesis := &Block{
+		Index:    0,
+		Hash:     "genesis-hash",
+		Parent:   nil,
+		Children: make([]*Block, 0),
+	}
+
+	block1 := &Block{
+		Index:    1,
+		Hash:     "block1-hash",
+		Children: make([]*Block, 0),
+	}
+
+	block2 := &Block{
+		Index:    2,
+		Hash:     "block2-hash",
+		Children: make([]*Block, 0),
+	}
+
+	block3 := &Block{
+		Index:    3,
+		Hash:     "block3-hash",
+		Children: make([]*Block, 0),
+	}
+
+	// Build the chain
+	genesis.AddChild(block1)
+	block1.AddChild(block2)
+	block2.AddChild(block3)
+
+	// Test depths
+	assert.Equal(t, uint64(0), genesis.GetDepth(), "Genesis should have depth 0")
+	assert.Equal(t, uint64(1), block1.GetDepth(), "Block1 should have depth 1")
+	assert.Equal(t, uint64(2), block2.GetDepth(), "Block2 should have depth 2")
+	assert.Equal(t, uint64(3), block3.GetDepth(), "Block3 should have depth 3")
+}
+
+func TestBlockGetPath(t *testing.T) {
+	// Create a chain: genesis -> block1 -> block2
+	genesis := &Block{
+		Index:    0,
+		Hash:     "genesis-hash",
+		Parent:   nil,
+		Children: make([]*Block, 0),
+	}
+
+	block1 := &Block{
+		Index:    1,
+		Hash:     "block1-hash",
+		Children: make([]*Block, 0),
+	}
+
+	block2 := &Block{
+		Index:    2,
+		Hash:     "block2-hash",
+		Children: make([]*Block, 0),
+	}
+
+	// Build the chain
+	genesis.AddChild(block1)
+	block1.AddChild(block2)
+
+	// Test paths
+	genesisPath := genesis.GetPath()
+	assert.Len(t, genesisPath, 1, "Genesis path should have 1 block")
+	assert.Equal(t, genesis, genesisPath[0], "Genesis path should contain genesis")
+
+	block1Path := block1.GetPath()
+	assert.Len(t, block1Path, 2, "Block1 path should have 2 blocks")
+	assert.Equal(t, genesis, block1Path[0], "Block1 path should start with genesis")
+	assert.Equal(t, block1, block1Path[1], "Block1 path should end with block1")
+
+	block2Path := block2.GetPath()
+	assert.Len(t, block2Path, 3, "Block2 path should have 3 blocks")
+	assert.Equal(t, genesis, block2Path[0], "Block2 path should start with genesis")
+	assert.Equal(t, block1, block2Path[1], "Block2 path should contain block1")
+	assert.Equal(t, block2, block2Path[2], "Block2 path should end with block2")
+}
+
+func TestBlockIsAncestorOf(t *testing.T) {
+	// Create a chain: genesis -> block1 -> block2 -> block3
+	genesis := &Block{
+		Index:    0,
+		Hash:     "genesis-hash",
+		Parent:   nil,
+		Children: make([]*Block, 0),
+	}
+
+	block1 := &Block{
+		Index:    1,
+		Hash:     "block1-hash",
+		Children: make([]*Block, 0),
+	}
+
+	block2 := &Block{
+		Index:    2,
+		Hash:     "block2-hash",
+		Children: make([]*Block, 0),
+	}
+
+	block3 := &Block{
+		Index:    3,
+		Hash:     "block3-hash",
+		Children: make([]*Block, 0),
+	}
+
+	// Build the chain
+	genesis.AddChild(block1)
+	block1.AddChild(block2)
+	block2.AddChild(block3)
+
+	// Test ancestor relationships
+	assert.True(t, genesis.IsAncestorOf(block1), "Genesis should be ancestor of block1")
+	assert.True(t, genesis.IsAncestorOf(block2), "Genesis should be ancestor of block2")
+	assert.True(t, genesis.IsAncestorOf(block3), "Genesis should be ancestor of block3")
+	assert.True(t, block1.IsAncestorOf(block2), "Block1 should be ancestor of block2")
+	assert.True(t, block1.IsAncestorOf(block3), "Block1 should be ancestor of block3")
+	assert.True(t, block2.IsAncestorOf(block3), "Block2 should be ancestor of block3")
+
+	// Test non-ancestor relationships
+	assert.False(t, block1.IsAncestorOf(genesis), "Block1 should not be ancestor of genesis")
+	assert.False(t, block2.IsAncestorOf(block1), "Block2 should not be ancestor of block1")
+	assert.False(t, block3.IsAncestorOf(block2), "Block3 should not be ancestor of block2")
+	assert.False(t, block1.IsAncestorOf(block1), "Block should not be ancestor of itself")
+}
+
+func TestBlockTreeWithForks(t *testing.T) {
+	// Create a tree with forks:
+	//     genesis
+	//    /        \
+	//  block1a   block1b
+	//   |         |
+	// block2a   block2b
+
+	genesis := &Block{
+		Index:    0,
+		Hash:     "genesis-hash",
+		Parent:   nil,
+		Children: make([]*Block, 0),
+	}
+
+	block1a := &Block{
+		Index:    1,
+		Hash:     "block1a-hash",
+		Children: make([]*Block, 0),
+	}
+
+	block1b := &Block{
+		Index:    1,
+		Hash:     "block1b-hash",
+		Children: make([]*Block, 0),
+	}
+
+	block2a := &Block{
+		Index:    2,
+		Hash:     "block2a-hash",
+		Children: make([]*Block, 0),
+	}
+
+	block2b := &Block{
+		Index:    2,
+		Hash:     "block2b-hash",
+		Children: make([]*Block, 0),
+	}
+
+	// Build the tree
+	genesis.AddChild(block1a)
+	genesis.AddChild(block1b)
+	block1a.AddChild(block2a)
+	block1b.AddChild(block2b)
+
+	// Test structure
+	assert.Len(t, genesis.Children, 2, "Genesis should have 2 children")
+	assert.Contains(t, genesis.Children, block1a, "Genesis should contain block1a")
+	assert.Contains(t, genesis.Children, block1b, "Genesis should contain block1b")
+
+	// Test paths for different chains
+	path2a := block2a.GetPath()
+	path2b := block2b.GetPath()
+
+	assert.Len(t, path2a, 3, "Path to block2a should have 3 blocks")
+	assert.Equal(t, genesis, path2a[0], "Path2a should start with genesis")
+	assert.Equal(t, block1a, path2a[1], "Path2a should go through block1a")
+	assert.Equal(t, block2a, path2a[2], "Path2a should end with block2a")
+
+	assert.Len(t, path2b, 3, "Path to block2b should have 3 blocks")
+	assert.Equal(t, genesis, path2b[0], "Path2b should start with genesis")
+	assert.Equal(t, block1b, path2b[1], "Path2b should go through block1b")
+	assert.Equal(t, block2b, path2b[2], "Path2b should end with block2b")
+
+	// Test ancestor relationships across forks
+	assert.True(t, genesis.IsAncestorOf(block2a), "Genesis should be ancestor of block2a")
+	assert.True(t, genesis.IsAncestorOf(block2b), "Genesis should be ancestor of block2b")
+	assert.False(t, block1a.IsAncestorOf(block2b), "Block1a should not be ancestor of block2b")
+	assert.False(t, block1b.IsAncestorOf(block2a), "Block1b should not be ancestor of block2a")
+}
