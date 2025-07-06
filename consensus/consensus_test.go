@@ -455,13 +455,14 @@ func TestConsensusEngine_CreateBlock(t *testing.T) {
 	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Call createNewBlock directly
-	ce.createNewBlock("Test Message")
+	ce.createNewBlock(123)
 
 	// Check if a new block was created
 	latestBlock := bc.GetLatestBlock()
 	assert.Equal(t, uint64(1), latestBlock.Index, "Block should be created with index 1")
-	assert.Contains(t, latestBlock.Data, "Test Message", "Block should contain the original message")
-	assert.Contains(t, latestBlock.Data, "Modified at:", "Block should have timestamp modification")
+	assert.Contains(t, latestBlock.Data, "123", "Block should contain the slot ID")
+	assert.Contains(t, latestBlock.Data, "timestamp", "Block should have timestamp field")
+	assert.Contains(t, latestBlock.Data, "weather", "Block should have weather field")
 	assert.Equal(t, "test-validator", latestBlock.ValidatorAddress, "Block should have correct validator")
 
 	// Verify signature format (in real implementation, verify cryptographically)

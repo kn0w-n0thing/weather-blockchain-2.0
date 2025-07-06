@@ -2,6 +2,7 @@ package weather
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"github.com/joho/godotenv"
@@ -67,7 +68,7 @@ func (api *OpenWeatherAPI) FetchWeather() (Data, error) {
 	}
 
 	log.WithFields(logger.Fields{
-		"source": api.GetSource(),
+		"source":  api.GetSource(),
 		"rawData": string(body),
 	}).Debug("Received raw weather data")
 
@@ -102,7 +103,7 @@ func (api *OpenWeatherAPI) FetchWeather() (Data, error) {
 
 	log.WithFields(logger.Fields{
 		"source": api.GetSource(),
-		"data": data,
+		"data":   data,
 	}).Info("Weather data processed")
 	return data, nil
 }
@@ -138,7 +139,7 @@ func (api *AccuWeatherAPI) FetchWeather() (Data, error) {
 	}
 
 	log.WithFields(logger.Fields{
-		"source": api.GetSource(),
+		"source":  api.GetSource(),
 		"rawData": string(body),
 	}).Debug("Received raw weather data")
 
@@ -172,7 +173,7 @@ func (api *AccuWeatherAPI) FetchWeather() (Data, error) {
 
 	log.WithFields(logger.Fields{
 		"source": api.GetSource(),
-		"data": data,
+		"data":   data,
 	}).Info("Weather data processed")
 	return data, nil
 }
@@ -208,7 +209,7 @@ func (api *XinzhiWeatherAPI) FetchWeather() (Data, error) {
 	}
 
 	log.WithFields(logger.Fields{
-		"source": api.GetSource(),
+		"source":  api.GetSource(),
 		"rawData": string(body),
 	}).Debug("Received raw weather data")
 
@@ -254,7 +255,7 @@ func (api *XinzhiWeatherAPI) FetchWeather() (Data, error) {
 
 	log.WithFields(logger.Fields{
 		"source": api.GetSource(),
-		"data": data,
+		"data":   data,
 	}).Info("Weather data processed")
 	return data, nil
 }
@@ -267,6 +268,16 @@ type MojiWeatherAPI struct {
 
 func (api *MojiWeatherAPI) GetSource() string {
 	return "Mj"
+}
+
+func createMojiHTTPClient() *http.Client {
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			ServerName:         "", // Let Go figure it out
+		},
+	}
+	return &http.Client{Transport: tr}
 }
 
 func (api *MojiWeatherAPI) FetchWeather() (Data, error) {
@@ -286,7 +297,7 @@ func (api *MojiWeatherAPI) FetchWeather() (Data, error) {
 	req.Header.Set("Authorization", "APPCODE "+api.AppCode)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 
-	client := &http.Client{}
+	client := createMojiHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return data, err
@@ -304,7 +315,7 @@ func (api *MojiWeatherAPI) FetchWeather() (Data, error) {
 	}
 
 	log.WithFields(logger.Fields{
-		"source": api.GetSource(),
+		"source":  api.GetSource(),
 		"rawData": string(body),
 	}).Debug("Received raw weather data")
 
@@ -347,7 +358,7 @@ func (api *MojiWeatherAPI) FetchWeather() (Data, error) {
 
 	log.WithFields(logger.Fields{
 		"source": api.GetSource(),
-		"data": data,
+		"data":   data,
 	}).Info("Weather data processed")
 	return data, nil
 }
@@ -383,7 +394,7 @@ func (api *AzureWeatherAPI) FetchWeather() (Data, error) {
 	}
 
 	log.WithFields(logger.Fields{
-		"source": api.GetSource(),
+		"source":  api.GetSource(),
 		"rawData": string(body),
 	}).Debug("Received raw weather data")
 
@@ -418,7 +429,7 @@ func (api *AzureWeatherAPI) FetchWeather() (Data, error) {
 
 	log.WithFields(logger.Fields{
 		"source": api.GetSource(),
-		"data": data,
+		"data":   data,
 	}).Info("Weather data processed")
 	return data, nil
 }

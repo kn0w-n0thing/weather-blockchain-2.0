@@ -34,7 +34,6 @@ type WeatherService interface {
 	GetLatestWeatherData() (*weather.Data, error)
 }
 
-
 // Engine manages the PoS consensus mechanism
 type Engine struct {
 	blockchain          *block.Blockchain
@@ -129,7 +128,7 @@ func (ce *Engine) monitorSlots() {
 
 			// Create new block
 			log.WithField("currentSlot", currentSlot).Info("Creating new block as validator")
-			ce.createNewBlock(fmt.Sprintf("Message for slot %d", currentSlot))
+			ce.createNewBlock(currentSlot)
 		}
 
 		// Calculate time to next slot
@@ -143,10 +142,10 @@ func (ce *Engine) monitorSlots() {
 }
 
 // createNewBlock creates a new block as a validator
-func (ce *Engine) createNewBlock(message string) {
+func (ce *Engine) createNewBlock(slotId uint64) {
 	log.WithFields(logger.Fields{
 		"validatorID": ce.validatorID,
-		"message":     message,
+		"slotId":      slotId,
 	}).Debug("Creating new block as validator")
 
 	ce.mutex.Lock()
@@ -178,36 +177,36 @@ func (ce *Engine) createNewBlock(message string) {
 	}).Debug("Assembling new block")
 
 	// Get latest weather data and include it in the block
-	var blockData string
+	blockDataStruct := map[string]interface{}{
+		"slotId":    slotId,
+		"timestamp": timestamp,
+		"weather":   nil,
+	}
+
 	if ce.weatherService != nil {
 		weatherData, err := ce.weatherService.GetLatestWeatherData()
 		if err != nil {
 			log.WithError(err).Warn("Failed to fetch weather data for block, using fallback")
-			timestampStr := time.Unix(0, timestamp).Format("2006-01-02 15:04:05")
-			blockData = fmt.Sprintf("%s - Modified at: %s", message, timestampStr)
 		} else {
-			// Convert weather data to JSON and include in block
-			weatherJSON, jsonErr := json.Marshal(weatherData)
-			if jsonErr != nil {
-				log.WithError(jsonErr).Warn("Failed to marshal weather data, using fallback")
-				timestampStr := time.Unix(0, timestamp).Format("2006-01-02 15:04:05")
-				blockData = fmt.Sprintf("%s - Modified at: %s", message, timestampStr)
-			} else {
-				timestampStr := time.Unix(0, timestamp).Format("2006-01-02 15:04:05")
-				blockData = fmt.Sprintf("%s - Modified at: %s - Weather: %s", message, timestampStr, string(weatherJSON))
-				log.WithField("weatherData", weatherData).Info("Weather data included in block")
-			}
+			blockDataStruct["weather"] = weatherData
+			log.WithField("weatherData", weatherData).Info("Weather data included in block")
 		}
+	}
+
+	blockDataJSON, jsonErr := json.Marshal(blockDataStruct)
+	var blockDataStr string
+	if jsonErr != nil {
+		log.WithError(jsonErr).Error("Failed to marshal block data to JSON, using fallback")
+		blockDataStr = fmt.Sprintf(`{"slotId": %d, "timestamp": %d, "weather": null}`, slotId, timestamp)
 	} else {
-		timestampStr := time.Unix(0, timestamp).Format("2006-01-02 15:04:05")
-		blockData = fmt.Sprintf("%s - Modified at: %s", message, timestampStr)
+		blockDataStr = string(blockDataJSON)
 	}
 
 	newBlock := &block.Block{
 		Index:              newBlockIndex,
 		Timestamp:          timestamp,
 		PrevHash:           latestBlock.Hash,
-		Data:               blockData,
+		Data:               blockDataStr,
 		ValidatorAddress:   ce.validatorID,
 		Signature:          []byte{},              // Will be set below
 		ValidatorPublicKey: ce.validatorPublicKey, // Store public key
