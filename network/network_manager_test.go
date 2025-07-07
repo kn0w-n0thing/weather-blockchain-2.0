@@ -250,9 +250,13 @@ func TestGetIncomingBlocksChannel(t *testing.T) {
 	// Verify that the channel is not nil
 	assert.NotNil(t, incomingChan, "Incoming blocks channel should not be nil")
 
-	// Test that it's the same channel returned by GetIncomingBlocks
-	incomingChan2 := node.GetIncomingBlocks()
-	assert.Equal(t, incomingChan, incomingChan2, "Both methods should return the same channel")
+	// Test that GetIncomingBlocks also returns a valid channel (though different type)
+	incomingInterfaceChan := node.GetIncomingBlocks()
+	assert.NotNil(t, incomingInterfaceChan, "GetIncomingBlocks should also return a valid channel")
+	
+	// Note: GetIncomingBlocksChannel returns <-chan *block.Block for internal use
+	// while GetIncomingBlocks returns <-chan interface{} for Manager interface compatibility
+	// These are different channels serving different purposes
 }
 
 // TestBroadcastBlockChannelFull tests the behavior when the outgoing channel is full

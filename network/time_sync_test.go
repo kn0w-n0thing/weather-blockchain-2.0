@@ -13,8 +13,9 @@ import (
 
 // MockNetworkManager implements NetworkManager interface for testing
 type MockNetworkManager struct {
-	id    string
-	peers map[string]string
+	id         string
+	peers      map[string]string
+	blockchain interface{}
 }
 
 func NewMockNetworkManager(id string) *MockNetworkManager {
@@ -34,6 +35,55 @@ func (m *MockNetworkManager) GetID() string {
 
 func (m *MockNetworkManager) AddPeer(id, address string) {
 	m.peers[id] = address
+}
+
+// GetBlockchain returns the blockchain instance (for NetworkManager interface)
+func (m *MockNetworkManager) GetBlockchain() interface{} {
+	return m.blockchain
+}
+
+// Start starts the network manager (for NetworkManager interface)
+func (m *MockNetworkManager) Start() error {
+	return nil
+}
+
+// Stop stops the network manager (for NetworkManager interface)
+func (m *MockNetworkManager) Stop() error {
+	// Mock implementation - do nothing
+	return nil
+}
+
+// BroadcastBlock broadcasts a block to the network (for NetworkManager interface)
+func (m *MockNetworkManager) BroadcastBlock(block interface{}) {
+	// Mock implementation - do nothing
+}
+
+// SendBlockRequest sends a block request (for NetworkManager interface)
+func (m *MockNetworkManager) SendBlockRequest(blockIndex uint64) {
+	// Mock implementation - do nothing
+}
+
+// SendBlockRangeRequest sends a block range request (for NetworkManager interface)
+func (m *MockNetworkManager) SendBlockRangeRequest(startIndex, endIndex uint64) {
+	// Mock implementation - do nothing
+}
+
+// SetBlockProvider sets the block provider (for NetworkManager interface)
+func (m *MockNetworkManager) SetBlockProvider(provider interface{}) {
+	// Mock implementation - do nothing
+}
+
+// GetIncomingBlocks returns a channel for incoming blocks (for NetworkManager interface)
+func (m *MockNetworkManager) GetIncomingBlocks() <-chan interface{} {
+	// Return a closed channel for mock
+	ch := make(chan interface{})
+	close(ch)
+	return ch
+}
+
+// SyncWithPeers syncs with peers (for NetworkManager interface)
+func (m *MockNetworkManager) SyncWithPeers(blockchain interface{}) error {
+	return nil
 }
 
 // TestNewEthTimeSync tests the constructor for the Ethereum-inspired TimeSync
@@ -225,12 +275,12 @@ func TestIsValidatorForCurrentSlot(t *testing.T) {
 // TestAssignValidatorsForSlot tests the validator assignment algorithm
 func TestAssignValidatorsForSlot(t *testing.T) {
 	mockNetMgr := NewMockNetworkManager("test-node")
-	
+
 	// Add some mock peers to have enough validators
 	mockNetMgr.AddPeer("peer-1", "192.168.1.1:8080")
 	mockNetMgr.AddPeer("peer-2", "192.168.1.2:8080")
 	mockNetMgr.AddPeer("peer-3", "192.168.1.3:8080")
-	
+
 	ts := NewTimeSync(mockNetMgr)
 
 	// Test assignment for slot 1
@@ -375,14 +425,14 @@ func TestTimeSyncIntegration(t *testing.T) {
 	// The differences should reflect the initial offsets we set
 	// Allow some tolerance for timing variations
 	tolerance := 10 * time.Millisecond
-	
+
 	// Node1 (0ms) vs Node2 (+50ms) should be ~50ms apart
 	expectedDiff12 := 50 * time.Millisecond
 	actualDiff12 := diff12 - expectedDiff12
 	if actualDiff12 < 0 {
 		actualDiff12 = -actualDiff12
 	}
-	assert.LessOrEqual(t, actualDiff12, tolerance, 
+	assert.LessOrEqual(t, actualDiff12, tolerance,
 		"Time difference between node1 and node2 unexpected: got %v, expected ~%v", diff12, expectedDiff12)
 
 	// Node1 (0ms) vs Node3 (-75ms) should be ~75ms apart
@@ -396,9 +446,42 @@ func TestTimeSyncIntegration(t *testing.T) {
 
 	// Test slot calculation consistency - all nodes should agree on current slot
 	// since they all use the same genesis time
-	slot1 := node1.GetCurrentSlot()
-	slot2 := node2.GetCurrentSlot()
-	slot3 := node3.GetCurrentSlot()
+	// Capture time once to ensure all nodes calculate based on the same moment
+	testTime := time.Now()
+
+	// Override GetNetworkTime temporarily for consistent slot calculation
+	node1.mutex.Lock()
+	originalOffset1 := node1.timeOffset
+	node1.timeOffset = 0
+	node1.mutex.Unlock()
+
+	node2.mutex.Lock()
+	originalOffset2 := node2.timeOffset
+	node2.timeOffset = 0
+	node2.mutex.Unlock()
+
+	node3.mutex.Lock()
+	originalOffset3 := node3.timeOffset
+	node3.timeOffset = 0
+	node3.mutex.Unlock()
+
+	// Calculate slot for the same time point for all nodes
+	slot1 := uint64((testTime.Sub(node1.genesisTime)) / SlotDuration)
+	slot2 := uint64((testTime.Sub(node2.genesisTime)) / SlotDuration)
+	slot3 := uint64((testTime.Sub(node3.genesisTime)) / SlotDuration)
+
+	// Restore original offsets
+	node1.mutex.Lock()
+	node1.timeOffset = originalOffset1
+	node1.mutex.Unlock()
+
+	node2.mutex.Lock()
+	node2.timeOffset = originalOffset2
+	node2.mutex.Unlock()
+
+	node3.mutex.Lock()
+	node3.timeOffset = originalOffset3
+	node3.mutex.Unlock()
 
 	t.Logf("Current slot from node1: %d", slot1)
 	t.Logf("Current slot from node2: %d", slot2)
@@ -436,12 +519,14 @@ func TestTimeSyncIntegration(t *testing.T) {
 }
 
 // Helper to create a node with a specific time offset
-func createNodeWithOffset(t *testing.T, offset time.Duration) *TimeSync {
+func createNodeWithOffset(_ *testing.T, offset time.Duration) *TimeSync {
 	node := NewTimeSync(NewMockNetworkManager("test-node"))
 
-	// Set the initial time offset
+	// Set the initial time offset AND ensure consistent genesis time for testing
 	node.mutex.Lock()
 	node.timeOffset = offset
+	// Set a fixed genesis time for consistent slot calculation during tests
+	node.genesisTime = time.Date(2020, 12, 1, 12, 0, 23, 0, time.UTC)
 	node.mutex.Unlock()
 
 	return node

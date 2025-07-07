@@ -25,8 +25,8 @@ type Block struct {
 	Hash               string
 	
 	// Tree structure for fork handling
-	Parent   *Block
-	Children []*Block
+	Parent   *Block   `json:"-"`
+	Children []*Block `json:"-"`
 }
 
 func (block *Block) CalculateHash() []byte {

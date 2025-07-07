@@ -71,7 +71,13 @@ func NewMockWeatherService() *MockWeatherService {
 	}
 }
 
-func (m *MockBroadcaster) BroadcastBlock(b *block.Block) {
+func (m *MockBroadcaster) BroadcastBlock(blockInterface interface{}) {
+	// Type assert to *block.Block for the actual implementation
+	b, ok := blockInterface.(*block.Block)
+	if !ok {
+		// In tests, we should always get the correct type, but handle gracefully
+		return
+	}
 	m.broadcastedBlocks = append(m.broadcastedBlocks, b)
 }
 

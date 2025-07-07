@@ -49,8 +49,9 @@ func createTestTimeSync(currentSlot uint64) *MockTimeSync {
 // CreateTestNode creates a test node for unit testing
 func createTestNode(id string, peers map[string]string) *Node {
 	node := &Node{
-		ID:    id,
-		Peers: peers,
+		ID:         id,
+		Peers:      peers,
+		blockchain: nil, // Initialize blockchain to nil
 	}
 	return node
 }
@@ -594,4 +595,342 @@ func TestLogValidatorSchedule(t *testing.T) {
 	assert.NotPanics(t, func() {
 		vs.LogValidatorSchedule(5)
 	}, "LogValidatorSchedule should not panic")
+}
+
+// MockValidatorBlock for testing blockchain-based validator selection
+type MockValidatorBlock struct {
+	validatorAddress string
+	parent           interface{}
+}
+
+func (mvb *MockValidatorBlock) ValidatorAddress() string {
+	return mvb.validatorAddress
+}
+
+func (mvb *MockValidatorBlock) GetParent() interface{} {
+	return mvb.parent
+}
+
+// MockValidatorBlockchain for testing blockchain-based validator selection
+type MockValidatorBlockchain struct {
+	latestBlock *MockValidatorBlock
+}
+
+func (mvb *MockValidatorBlockchain) GetLatestBlock() interface{} {
+	if mvb.latestBlock == nil {
+		return nil
+	}
+	return mvb.latestBlock
+}
+
+// TestGetValidatorSetFromBlockchain tests the getValidatorSetFromBlockchain method
+func TestGetValidatorSetFromBlockchain(t *testing.T) {
+	timeSync := createTestTimeSync(50)
+	
+	t.Run("NoBlockchain", func(t *testing.T) {
+		// Test when no blockchain is available
+		node := createTestNode("testNode", map[string]string{
+			"peer1": "127.0.0.1:8001",
+			"peer2": "127.0.0.1:8002",
+		})
+		
+		// No blockchain set in node (should use GetBlockchain() which returns nil)
+		node.blockchain = nil
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		validators := vs.getValidatorSetFromBlockchain()
+		
+		// Should fall back to peer discovery
+		assert.Contains(t, validators, "testNode", "Should include local node")
+		assert.Contains(t, validators, "peer1", "Should include peer1")
+		assert.Contains(t, validators, "peer2", "Should include peer2")
+		assert.Equal(t, 3, len(validators), "Should have 3 validators from peer discovery")
+	})
+
+	t.Run("BlockchainWithInvalidInterface", func(t *testing.T) {
+		// Test when blockchain doesn't implement expected interface
+		node := createTestNode("testNode", map[string]string{
+			"peer1": "127.0.0.1:8001",
+		})
+		
+		// Set invalid blockchain type
+		node.blockchain = "invalid"
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		validators := vs.getValidatorSetFromBlockchain()
+		
+		// Should fall back to peer discovery
+		assert.Contains(t, validators, "testNode", "Should include local node")
+		assert.Contains(t, validators, "peer1", "Should include peer1")
+		assert.Equal(t, 2, len(validators), "Should have 2 validators from peer discovery")
+	})
+
+	t.Run("BlockchainWithNoBlocks", func(t *testing.T) {
+		// Test when blockchain has no blocks
+		node := createTestNode("testNode", map[string]string{
+			"peer1": "127.0.0.1:8001",
+		})
+		
+		mockBlockchain := &MockValidatorBlockchain{latestBlock: nil}
+		node.blockchain = mockBlockchain
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		validators := vs.getValidatorSetFromBlockchain()
+		
+		// Should fall back to peer discovery
+		assert.Contains(t, validators, "testNode", "Should include local node")
+		assert.Contains(t, validators, "peer1", "Should include peer1")
+		assert.Equal(t, 2, len(validators), "Should have 2 validators from peer discovery")
+	})
+
+	t.Run("BlockchainWithValidBlocks", func(t *testing.T) {
+		// Test when blockchain has valid blocks with validators
+		node := createTestNode("testNode", map[string]string{
+			"peer1": "127.0.0.1:8001",
+		})
+		
+		// Create a chain of blocks with different validators
+		block3 := &MockValidatorBlock{validatorAddress: "validator3", parent: nil}
+		block2 := &MockValidatorBlock{validatorAddress: "validator2", parent: block3}
+		block1 := &MockValidatorBlock{validatorAddress: "validator1", parent: block2}
+		
+		mockBlockchain := &MockValidatorBlockchain{latestBlock: block1}
+		node.blockchain = mockBlockchain
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		validators := vs.getValidatorSetFromBlockchain()
+		
+		// Should include validators from blockchain
+		assert.Contains(t, validators, "testNode", "Should always include local node")
+		assert.Contains(t, validators, "validator1", "Should include validator1 from blockchain")
+		assert.Contains(t, validators, "validator2", "Should include validator2 from blockchain")
+		assert.Contains(t, validators, "validator3", "Should include validator3 from blockchain")
+		assert.Equal(t, 4, len(validators), "Should have 4 validators")
+		
+		// Should be sorted
+		expectedOrder := []string{"testNode", "validator1", "validator2", "validator3"}
+		assert.Equal(t, expectedOrder, validators, "Validators should be sorted")
+	})
+
+	t.Run("BlockchainWithDuplicateValidators", func(t *testing.T) {
+		// Test when blockchain has duplicate validator addresses
+		node := createTestNode("testNode", map[string]string{})
+		
+		// Create blocks with duplicate validators
+		block3 := &MockValidatorBlock{validatorAddress: "validator1", parent: nil}
+		block2 := &MockValidatorBlock{validatorAddress: "validator2", parent: block3}
+		block1 := &MockValidatorBlock{validatorAddress: "validator1", parent: block2} // Duplicate
+		
+		mockBlockchain := &MockValidatorBlockchain{latestBlock: block1}
+		node.blockchain = mockBlockchain
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		validators := vs.getValidatorSetFromBlockchain()
+		
+		// Should deduplicate validators
+		assert.Contains(t, validators, "testNode", "Should include local node")
+		assert.Contains(t, validators, "validator1", "Should include validator1")
+		assert.Contains(t, validators, "validator2", "Should include validator2")
+		assert.Equal(t, 3, len(validators), "Should deduplicate validators")
+	})
+
+	t.Run("LocalNodeAlreadyInBlockchain", func(t *testing.T) {
+		// Test when local node is already a validator in blockchain
+		node := createTestNode("testNode", map[string]string{})
+		
+		// Create blocks where local node is already a validator
+		block2 := &MockValidatorBlock{validatorAddress: "validator1", parent: nil}
+		block1 := &MockValidatorBlock{validatorAddress: "testNode", parent: block2}
+		
+		mockBlockchain := &MockValidatorBlockchain{latestBlock: block1}
+		node.blockchain = mockBlockchain
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		validators := vs.getValidatorSetFromBlockchain()
+		
+		// Should not duplicate local node
+		nodeCount := 0
+		for _, validator := range validators {
+			if validator == "testNode" {
+				nodeCount++
+			}
+		}
+		assert.Equal(t, 1, nodeCount, "Local node should appear only once")
+		assert.Contains(t, validators, "testNode", "Should include local node")
+		assert.Contains(t, validators, "validator1", "Should include validator1")
+		assert.Equal(t, 2, len(validators), "Should have 2 validators")
+	})
+}
+
+// TestGetValidatorSetFromPeers tests the getValidatorSetFromPeers method
+func TestGetValidatorSetFromPeers(t *testing.T) {
+	timeSync := createTestTimeSync(50)
+	
+	t.Run("NoPeers", func(t *testing.T) {
+		// Test with no peers
+		node := createTestNode("testNode", map[string]string{})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		validators := vs.getValidatorSetFromPeers()
+		
+		// Should only include local node
+		assert.Equal(t, []string{"testNode"}, validators, "Should only include local node when no peers")
+	})
+
+	t.Run("MultiplePeers", func(t *testing.T) {
+		// Test with multiple peers
+		node := createTestNode("testNode", map[string]string{
+			"peer1": "127.0.0.1:8001",
+			"peer2": "127.0.0.1:8002",
+			"peer3": "127.0.0.1:8003",
+		})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		validators := vs.getValidatorSetFromPeers()
+		
+		// Should include local node and all peers
+		expectedValidators := []string{"peer1", "peer2", "peer3", "testNode"}
+		assert.Equal(t, expectedValidators, validators, "Should include local node and all peers in sorted order")
+		assert.Equal(t, 4, len(validators), "Should have 4 validators")
+	})
+
+	t.Run("PeersSorted", func(t *testing.T) {
+		// Test that peers are sorted alphabetically
+		node := createTestNode("zebra", map[string]string{
+			"charlie": "127.0.0.1:8001",
+			"alpha":   "127.0.0.1:8002",
+			"beta":    "127.0.0.1:8003",
+		})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		validators := vs.getValidatorSetFromPeers()
+		
+		// Should be sorted alphabetically
+		expectedValidators := []string{"alpha", "beta", "charlie", "zebra"}
+		assert.Equal(t, expectedValidators, validators, "Validators should be sorted alphabetically")
+	})
+
+	t.Run("SinglePeer", func(t *testing.T) {
+		// Test with single peer
+		node := createTestNode("testNode", map[string]string{
+			"onlyPeer": "127.0.0.1:8001",
+		})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		validators := vs.getValidatorSetFromPeers()
+		
+		// Should include local node and the peer
+		expectedValidators := []string{"onlyPeer", "testNode"}
+		assert.Equal(t, expectedValidators, validators, "Should include local node and single peer")
+		assert.Equal(t, 2, len(validators), "Should have 2 validators")
+	})
+}
+
+// TestBuildCurrentEpochWithBlockchain tests buildCurrentEpoch using blockchain
+func TestBuildCurrentEpochWithBlockchain(t *testing.T) {
+	timeSync := createTestTimeSync(50)
+	
+	t.Run("UsesBlockchainValidators", func(t *testing.T) {
+		// Test that buildCurrentEpoch uses blockchain validators when available
+		node := createTestNode("testNode", map[string]string{
+			"peer1": "127.0.0.1:8001", // These should be ignored when blockchain is available
+		})
+		
+		// Create blockchain with validators
+		block2 := &MockValidatorBlock{validatorAddress: "blockchainValidator2", parent: nil}
+		block1 := &MockValidatorBlock{validatorAddress: "blockchainValidator1", parent: block2}
+		
+		mockBlockchain := &MockValidatorBlockchain{latestBlock: block1}
+		node.blockchain = mockBlockchain
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		vs.buildCurrentEpoch()
+		
+		// Should use validators from blockchain, not peers
+		assert.Contains(t, vs.currentEpoch.Participants, "testNode", "Should include local node")
+		assert.Contains(t, vs.currentEpoch.Participants, "blockchainValidator1", "Should include blockchain validator 1")
+		assert.Contains(t, vs.currentEpoch.Participants, "blockchainValidator2", "Should include blockchain validator 2")
+		assert.NotContains(t, vs.currentEpoch.Participants, "peer1", "Should not include peer when blockchain is available")
+		assert.Equal(t, 3, len(vs.currentEpoch.Participants), "Should have 3 participants from blockchain")
+	})
+
+	t.Run("FallbackToPeersWhenNoBlockchain", func(t *testing.T) {
+		// Test that buildCurrentEpoch falls back to peers when blockchain is not available
+		node := createTestNode("testNode", map[string]string{
+			"peer1": "127.0.0.1:8001",
+			"peer2": "127.0.0.1:8002",
+		})
+		
+		// No blockchain set
+		node.blockchain = nil
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		vs.buildCurrentEpoch()
+		
+		// Should use peers as fallback
+		assert.Contains(t, vs.currentEpoch.Participants, "testNode", "Should include local node")
+		assert.Contains(t, vs.currentEpoch.Participants, "peer1", "Should include peer1")
+		assert.Contains(t, vs.currentEpoch.Participants, "peer2", "Should include peer2")
+		assert.Equal(t, 3, len(vs.currentEpoch.Participants), "Should have 3 participants from peers")
+	})
 }

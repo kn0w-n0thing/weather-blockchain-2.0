@@ -257,6 +257,9 @@ func startServices(config *Config, acc *account.Account, blockchain *block.Block
 	if err := node.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start node: %w", err)
 	}
+	
+	// Set blockchain reference for unified NetworkManager interface
+	node.SetBlockchain(blockchain)
 	services.Node = node
 
 	// Start time sync
@@ -370,7 +373,14 @@ func startBackgroundTasks(services *Services) {
 func startNetworkBridge(consensusEngine *consensus.Engine, node *network.Node) {
 	logger.Logger.Info("Starting network-to-consensus bridge")
 	
-	for incomingBlock := range node.GetIncomingBlocks() {
+	for incomingBlockInterface := range node.GetIncomingBlocks() {
+		// Type assert from interface{} to *block.Block
+		incomingBlock, ok := incomingBlockInterface.(*block.Block)
+		if !ok {
+			logger.Logger.WithField("blockType", fmt.Sprintf("%T", incomingBlockInterface)).Warn("Bridge: Invalid block type received from network")
+			continue
+		}
+
 		logger.Logger.WithFields(logger.Fields{
 			"blockIndex": incomingBlock.Index,
 			"blockHash":  incomingBlock.Hash,

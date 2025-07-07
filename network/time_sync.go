@@ -23,12 +23,6 @@ const (
 	SlotsPerEpoch = 32
 )
 
-// NetworkManager interface defines methods needed to access network peers
-type NetworkManager interface {
-	GetPeers() map[string]string
-	GetID() string
-}
-
 // TimeSync implements Ethereum-inspired slot-based time synchronization
 // This struct implements the ITimeSync interface from validator_selection.go
 type TimeSync struct {
@@ -42,7 +36,7 @@ type TimeSync struct {
 	currentSlot     uint64              // Current slot number
 	ValidatorID     string              // This node's validator ID
 	validatorSlot   map[uint64][]string // Map of slots to validators assigned to them
-	networkManager  NetworkManager      // Reference to network manager for accessing peers
+	networkManager  Manager             // Reference to network manager for accessing peers
 }
 
 var NtpServerSource = [3]string{
@@ -61,7 +55,7 @@ func (timeSync *TimeSync) String() string {
 }
 
 // NewTimeSync creates a new TimeSync instance with Ethereum-inspired synchronization
-func NewTimeSync(networkManager NetworkManager) *TimeSync {
+func NewTimeSync(networkManager Manager) *TimeSync {
 	log.Debug("NewTimeSync: Creating new time synchronization service")
 	if networkManager == nil {
 		log.Errorf("NewTimeSync: NetworkManager is nil")

@@ -93,22 +93,10 @@ func (vs *ValidatorSelection) buildCurrentEpoch() {
 		"endSlot":     endSlot,
 	}).Debug("buildCurrentEpoch: Calculated epoch boundaries")
 
-	// Get current participants (include local node + all peers)
-	var participants []string
+	// Get participants from blockchain state instead of peer discovery
+	participants := vs.getValidatorSetFromBlockchain()
 
-	// Always include the local node as a participant
-	participants = append(participants, vs.node.ID)
-
-	// Add all discovered peers (use peer IDs, not addresses)
-	for peerID := range vs.node.Peers {
-		participants = append(participants, peerID)
-	}
-
-	// Sort participants to ensure deterministic ordering across all nodes
-	// This is critical for consensus - all nodes must have the same participant order
-	sort.Strings(participants)
-
-	log.WithField("participantCount", len(participants)).Debug("buildCurrentEpoch: Collected participants")
+	log.WithField("participantCount", len(participants)).Debug("buildCurrentEpoch: Collected participants from blockchain")
 
 	// Create epoch
 	epoch := &Epoch{
@@ -456,4 +444,124 @@ func (vs *ValidatorSelection) LogValidatorSchedule(count int) {
 		"scheduledSlots": count,
 		"validators":     scheduledValidators,
 	}).Debug("LogValidatorSchedule: Generated validator schedule")
+}
+
+// getValidatorSetFromBlockchain retrieves the canonical validator set from blockchain state
+func (vs *ValidatorSelection) getValidatorSetFromBlockchain() []string {
+	log.Debug("getValidatorSetFromBlockchain: Retrieving validator set from blockchain")
+
+	// Get the blockchain instance through the node
+	blockchainInterface := vs.node.GetBlockchain()
+	if blockchainInterface == nil {
+		log.Warn("getValidatorSetFromBlockchain: No blockchain available, falling back to peer discovery")
+		return vs.getValidatorSetFromPeers()
+	}
+
+	// Type assert to the specific blockchain type
+	blockchain, ok := blockchainInterface.(interface {
+		GetLatestBlock() interface{}
+	})
+	if !ok {
+		log.Warn("getValidatorSetFromBlockchain: Blockchain doesn't implement expected interface, falling back to peer discovery")
+		return vs.getValidatorSetFromPeers()
+	}
+
+	// Get validators from recent blocks (last 10 blocks)
+	validatorSet := make(map[string]bool)
+	latestBlockInterface := blockchain.GetLatestBlock()
+	
+	if latestBlockInterface == nil {
+		log.Warn("getValidatorSetFromBlockchain: No blocks in blockchain, falling back to peer discovery")
+		return vs.getValidatorSetFromPeers()
+	}
+
+	// Type assert to block type
+	latestBlock, ok := latestBlockInterface.(interface {
+		ValidatorAddress() string
+		GetParent() interface{}
+	})
+	if !ok || latestBlock == nil {
+		log.Warn("getValidatorSetFromBlockchain: Block doesn't implement expected interface or is nil, falling back to peer discovery")
+		return vs.getValidatorSetFromPeers()
+	}
+
+	// Collect validators from recent blocks
+	current := latestBlock
+	blockCount := 0
+	maxBlocks := 10
+
+	// If latestBlock is nil, current will be nil and the loop won't execute
+	for current != nil && blockCount < maxBlocks {
+		if current.ValidatorAddress() != "" {
+			validatorSet[current.ValidatorAddress()] = true
+		}
+		
+		// Move to parent block
+		if current.GetParent() != nil {
+			if parent, ok := current.GetParent().(interface {
+				ValidatorAddress() string
+				GetParent() interface{}
+			}); ok {
+				current = parent
+			} else {
+				break
+			}
+		} else {
+			break
+		}
+		blockCount++
+	}
+
+	// Convert to sorted slice
+	var validators []string
+	for validator := range validatorSet {
+		validators = append(validators, validator)
+	}
+	sort.Strings(validators)
+
+	// Always include local node if it's not already in the set
+	localNodeIncluded := false
+	for _, validator := range validators {
+		if validator == vs.node.ID {
+			localNodeIncluded = true
+			break
+		}
+	}
+
+	if !localNodeIncluded {
+		validators = append(validators, vs.node.ID)
+		sort.Strings(validators)
+	}
+
+	log.WithFields(logger.Fields{
+		"validatorCount": len(validators),
+		"validators":     validators,
+	}).Debug("getValidatorSetFromBlockchain: Retrieved validator set from blockchain")
+
+	return validators
+}
+
+// getValidatorSetFromPeers fallback method using peer discovery
+func (vs *ValidatorSelection) getValidatorSetFromPeers() []string {
+	log.Debug("getValidatorSetFromPeers: Using peer discovery as fallback")
+
+	var participants []string
+
+	// Always include the local node as a participant
+	participants = append(participants, vs.node.ID)
+
+	// Add all discovered peers (use peer IDs, not addresses)
+	for peerID := range vs.node.Peers {
+		participants = append(participants, peerID)
+	}
+
+	// Sort participants to ensure deterministic ordering
+	sort.Strings(participants)
+
+	log.WithFields(logger.Fields{
+		"participantCount": len(participants),
+		"participants":     participants,
+	}).Debug("getValidatorSetFromPeers: Retrieved validator set from peers")
+
+	return participants
 }

@@ -15,6 +15,26 @@ import (
 
 var log = logger.Logger
 
+// Manager interface defines all network operations including peers and blockchain access
+type Manager interface {
+	// GetPeers Peer management
+	GetPeers() map[string]string
+	GetID() string
+
+	// GetBlockchain Blockchain access
+	GetBlockchain() interface{}
+
+	// Start Network operations
+	Start() error
+	Stop() error
+	BroadcastBlock(block interface{})
+	SendBlockRequest(blockIndex uint64)
+	SendBlockRangeRequest(startIndex, endIndex uint64)
+	SetBlockProvider(provider interface{})
+	GetIncomingBlocks() <-chan interface{}
+	SyncWithPeers(blockchain interface{}) error
+}
+
 // MessageType Define message types for the network
 type MessageType int
 
@@ -79,12 +99,12 @@ type BlockProvider interface {
 
 // Broadcaster NetworkBroadcaster interface for broadcasting blocks to the network
 type Broadcaster interface {
-	BroadcastBlock(block *block.Block)
+	BroadcastBlock(block interface{})
 	SendBlockRequest(blockIndex uint64)
 	SendBlockRangeRequest(startIndex, endIndex uint64)
 }
 
-// Node represents a P2P node
+// Node represents a P2P node and implements NetworkManager interface
 type Node struct {
 	ID              string // Address
 	Port            int
@@ -101,6 +121,7 @@ type Node struct {
 	outgoingBlocks  chan *block.Block // Channel for outgoing blocks
 	incomingBlocks  chan *block.Block // Channel for incoming blocks
 	blockProvider   BlockProvider     // Callback to get blocks when requested
+	blockchain      interface{}       // Reference to blockchain for NetworkManager interface
 }
 
 // String returns a string representation of the Node
@@ -530,18 +551,41 @@ func (node *Node) GetID() string {
 }
 
 // SetBlockProvider sets the block provider for handling block requests
-func (node *Node) SetBlockProvider(provider BlockProvider) {
+func (node *Node) SetBlockProvider(providerInterface interface{}) {
+	// Type assert to BlockProvider for the actual implementation
+	provider, ok := providerInterface.(BlockProvider)
+	if !ok {
+		log.WithField("providerType", fmt.Sprintf("%T", providerInterface)).Error("SetBlockProvider: Invalid provider type, expected BlockProvider")
+		return
+	}
 	node.blockProvider = provider
 	log.Debug("SetBlockProvider: Block provider set for handling block requests")
 }
 
-// GetIncomingBlocks returns the channel for incoming blocks
-func (node *Node) GetIncomingBlocks() <-chan *block.Block {
-	return node.incomingBlocks
+// GetIncomingBlocks returns the channel for incoming blocks (Manager interface)
+func (node *Node) GetIncomingBlocks() <-chan interface{} {
+	// Create a new channel that converts *block.Block to interface{}
+	ch := make(chan interface{}, cap(node.incomingBlocks))
+
+	go func() {
+		defer close(ch)
+		for block := range node.incomingBlocks {
+			ch <- block
+		}
+	}()
+
+	return ch
 }
 
 // BroadcastBlock sends a block to the outgoing channel for broadcasting
-func (node *Node) BroadcastBlock(blk *block.Block) {
+func (node *Node) BroadcastBlock(blockInterface interface{}) {
+	// Type assert to *block.Block for the actual implementation
+	blk, ok := blockInterface.(*block.Block)
+	if !ok {
+		log.WithField("blockType", fmt.Sprintf("%T", blockInterface)).Error("BroadcastBlock: Invalid block type, expected *block.Block")
+		return
+	}
+
 	log.WithFields(logger.Fields{
 		"node":       node.String(),
 		"blockIndex": blk.Index,
@@ -1218,7 +1262,13 @@ func (node *Node) handleConnection(conn net.Conn) {
 }
 
 // SyncWithPeers attempts to synchronize the blockchain with network peers
-func (node *Node) SyncWithPeers(blockchain *block.Blockchain) error {
+func (node *Node) SyncWithPeers(blockchainInterface interface{}) error {
+	// Type assert to *block.Blockchain for the actual implementation
+	blockchain, ok := blockchainInterface.(*block.Blockchain)
+	if !ok {
+		log.WithField("blockchainType", fmt.Sprintf("%T", blockchainInterface)).Error("SyncWithPeers: Invalid blockchain type, expected *block.Blockchain")
+		return fmt.Errorf("invalid blockchain type: %T", blockchainInterface)
+	}
 	log.Info("Starting blockchain synchronization with network peers")
 
 	maxRetries := 3
@@ -1454,4 +1504,17 @@ func (node *Node) RequestBlockchainFromPeer(blockchain *block.Blockchain, peerAd
 	} else {
 		return fmt.Errorf("no blocks received from peer")
 	}
+}
+
+// NetworkManager interface implementation
+
+// GetBlockchain returns the blockchain reference
+func (node *Node) GetBlockchain() interface{} {
+	return node.blockchain
+}
+
+// SetBlockchain sets the blockchain reference for NetworkManager interface
+func (node *Node) SetBlockchain(blockchain interface{}) {
+	node.blockchain = blockchain
+	log.Debug("SetBlockchain: Blockchain reference set for NetworkManager interface")
 }
