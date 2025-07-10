@@ -6,7 +6,6 @@ import (
 	"github.com/urfave/cli/v2"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 	"weather-blockchain/account"
@@ -29,12 +28,12 @@ const (
 
 // Config holds application configuration
 type Config struct {
-	PemPath        string
-	Port           int
-	GenesisMode    bool
-	BlockchainFile string
-	OnlyCreatePem  bool
-	DebugMode      bool
+	PemPath         string
+	Port            int
+	GenesisMode     bool
+	BlockchainDir   string
+	OnlyCreatePem   bool
+	DebugMode       bool
 }
 
 // Services contains all running services
@@ -95,9 +94,9 @@ func defineFlags() []cli.Flag {
 			Usage: "Create the genesis block",
 		},
 		&cli.StringFlag{
-			Name:  "blockchain-file",
+			Name:  "blockchain-dir",
 			Value: "",
-			Usage: "Path to a custom blockchain file to load (if not specified, uses default location)",
+			Usage: "Path to a custom blockchain directory to load (if not specified, uses default location)",
 		},
 		&cli.BoolFlag{
 			Name:  "debug-validator",
@@ -110,12 +109,12 @@ func defineFlags() []cli.Flag {
 // loadConfig loads configuration from CLI context
 func loadConfig(ctx *cli.Context) *Config {
 	return &Config{
-		PemPath:        ctx.String("load-pem"),
-		Port:           ctx.Int("port"),
-		GenesisMode:    ctx.Bool("genesis"),
-		BlockchainFile: ctx.String("blockchain-file"),
-		OnlyCreatePem:  ctx.Bool("only-create-pem"),
-		DebugMode:      ctx.Bool("debug-validator"),
+		PemPath:       ctx.String("load-pem"),
+		Port:          ctx.Int("port"),
+		GenesisMode:   ctx.Bool("genesis"),
+		BlockchainDir: ctx.String("blockchain-dir"),
+		OnlyCreatePem: ctx.Bool("only-create-pem"),
+		DebugMode:     ctx.Bool("debug-validator"),
 	}
 }
 
@@ -193,7 +192,7 @@ func initializeBlockchain(config *Config, acc *account.Account) (*block.Blockcha
 	if config.GenesisMode {
 		return createGenesisBlockchain(acc)
 	}
-	return loadExistingBlockchain(config.BlockchainFile)
+	return loadExistingBlockchain(config.BlockchainDir)
 }
 
 // createGenesisBlockchain creates a new blockchain with genesis block
@@ -217,20 +216,20 @@ func createGenesisBlockchain(acc *account.Account) (*block.Blockchain, error) {
 }
 
 // loadExistingBlockchain loads blockchain from file
-func loadExistingBlockchain(customFile string) (*block.Blockchain, error) {
-	var blockchainPath string
+func loadExistingBlockchain(customDir string) (*block.Blockchain, error) {
+	var blockchainDir string
 
-	if customFile != "" {
-		blockchainPath = customFile
-		logger.Logger.WithField("filePath", blockchainPath).Info("Using custom blockchain file")
+	if customDir != "" {
+		blockchainDir = customDir
+		logger.Logger.WithField("dirPath", blockchainDir).Info("Using custom blockchain directory")
 	} else {
-		blockchainPath = filepath.Join(block.DataDirectory, block.ChainFile)
-		logger.Logger.WithField("filePath", blockchainPath).Debug("Using default blockchain file location")
+		blockchainDir = block.DataDirectory
+		logger.Logger.WithField("dirPath", blockchainDir).Debug("Using default blockchain directory")
 	}
 
-	blockchain, err := block.LoadBlockchainFromFile(blockchainPath)
+	blockchain, err := block.LoadBlockchainFromDirectory(blockchainDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load blockchain from %s: %w", blockchainPath, err)
+		return nil, fmt.Errorf("failed to load blockchain from %s: %w", blockchainDir, err)
 	}
 
 	if len(blockchain.Blocks) == 0 {

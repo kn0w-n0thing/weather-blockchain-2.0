@@ -2,6 +2,7 @@ package block
 
 import (
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"strconv"
@@ -56,6 +57,10 @@ func (block *Block) CalculateHash() []byte {
 }
 
 func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
+	if creatorAccount == nil {
+		return nil, fmt.Errorf("creator account cannot be nil")
+	}
+	
 	log.WithField("validator", creatorAccount.Address).Info("Creating genesis block")
 
 	currentTime := time.Now().UnixNano()
@@ -79,6 +84,14 @@ func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
 		return nil, err
 	}
 	genesisBlock.Signature = signature
+	
+	// Store the public key bytes
+	publicKeyBytes, err := x509.MarshalPKIXPublicKey(creatorAccount.PublicKey)
+	if err != nil {
+		log.WithError(err).Error("Failed to marshal public key for genesis block")
+		return nil, fmt.Errorf("failed to marshal public key: %w", err)
+	}
+	genesisBlock.ValidatorPublicKey = publicKeyBytes
 
 	log.WithFields(logger.Fields{
 		"index":     genesisBlock.Index,

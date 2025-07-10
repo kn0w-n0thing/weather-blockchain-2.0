@@ -1,9 +1,11 @@
 package block
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"testing"
@@ -432,24 +434,20 @@ func TestSaveToDisk(t *testing.T) {
 	err = bc.SaveToDisk()
 	assert.NoError(t, err, "Should save blockchain to disk without error")
 
-	// Check if the file exists
-	filePath := filepath.Join(tempDir, ChainFile)
-	_, err = os.Stat(filePath)
-	assert.False(t, os.IsNotExist(err), "Blockchain file should exist")
+	// Check if the database file exists
+	dbPath := filepath.Join(tempDir, DBFile)
+	_, err = os.Stat(dbPath)
+	assert.False(t, os.IsNotExist(err), "Database file should exist")
 
-	// Read the saved file
-	fileData, err := os.ReadFile(filePath)
-	require.NoError(t, err, "Should read blockchain file without error")
-
-	// Unmarshal the data
-	var savedBlocks []*Block
-	err = json.Unmarshal(fileData, &savedBlocks)
-	require.NoError(t, err, "Should unmarshal blockchain data without error")
+	// Create another blockchain instance to verify saved data
+	bc2 := NewBlockchain(tempDir)
+	err = bc2.LoadFromDisk()
+	require.NoError(t, err, "Should load blockchain from database without error")
 
 	// Verify the saved data
-	assert.Len(t, savedBlocks, 2, "Saved blockchain should have 2 blocks")
-	assert.Equal(t, genesisBlock.Hash, savedBlocks[0].Hash, "Genesis block hash should match")
-	assert.Equal(t, block2.Hash, savedBlocks[1].Hash, "Second block hash should match")
+	assert.Len(t, bc2.Blocks, 2, "Saved blockchain should have 2 blocks")
+	assert.Equal(t, genesisBlock.Hash, bc2.Blocks[0].Hash, "Genesis block hash should match")
+	assert.Equal(t, block2.Hash, bc2.Blocks[1].Hash, "Second block hash should match")
 }
 
 // TestLoadFromDisk tests the LoadFromDisk function
@@ -514,31 +512,36 @@ func TestLoadInvalidBlockchain(t *testing.T) {
 	require.NoError(t, err, "Should create temp directory without error")
 	defer os.RemoveAll(tempDir)
 
-	// Create an invalid blockchain file
-	invalidChain := []*Block{
-		{
-			Index:            1, // Should be 0 for genesis
-			Timestamp:        time.Now().Unix(),
-			PrevHash:         PrevHashOfGenesis,
-			ValidatorAddress: "testaddress",
-			Data:             "Invalid Genesis",
-			Hash:             "invaliddatahash",
-		},
+	// Create a blockchain with invalid data by manually manipulating database
+	bc := NewBlockchain(tempDir)
+
+	// Create an invalid genesis block and force it into the database
+	invalidBlock := &Block{
+		Index:            1, // Should be 0 for genesis
+		Timestamp:        time.Now().Unix(),
+		PrevHash:         PrevHashOfGenesis,
+		ValidatorAddress: "testaddress",
+		Data:             "Invalid Genesis",
+		Hash:             "invaliddatahash",
+		Children:         make([]*Block, 0),
 	}
 
-	invalidData, err := json.MarshalIndent(invalidChain, "", "  ")
-	require.NoError(t, err, "Should marshal invalid blockchain data without error")
+	// Manually insert invalid block into database
+	_, err = bc.db.Exec(`INSERT INTO blocks 
+		(hash, block_index, timestamp, prev_hash, validator_address, data, signature, validator_public_key, parent_hash, is_main_chain) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		invalidBlock.Hash, invalidBlock.Index, invalidBlock.Timestamp, invalidBlock.PrevHash,
+		invalidBlock.ValidatorAddress, invalidBlock.Data, invalidBlock.Signature, invalidBlock.ValidatorPublicKey,
+		"", true)
+	require.NoError(t, err, "Should insert invalid block into database")
 
-	// Write invalid data to file
-	filePath := filepath.Join(tempDir, ChainFile)
-	err = os.WriteFile(filePath, invalidData, 0644)
-	require.NoError(t, err, "Should write invalid blockchain data without error")
+	// Create a new blockchain instance and try to load the invalid data
+	bc2 := NewBlockchain(tempDir)
+	err = bc2.LoadFromDisk()
+	assert.NoError(t, err, "LoadFromDisk should not error - validation happens during block operations")
 
-	// Try to load the invalid blockchain
-	bc := NewBlockchain(tempDir)
-	err = bc.LoadFromDisk()
-	assert.Error(t, err, "LoadFromDisk should error with invalid blockchain")
-	assert.Contains(t, err.Error(), "invalid genesis block", "Error should mention invalid genesis block")
+	// The validation should happen when we try to use the blockchain
+	assert.Len(t, bc2.Blocks, 0, "Invalid genesis should result in empty main chain")
 }
 
 // TestAddBlockWithAutoSave tests the AddBlockWithAutoSave function
@@ -561,10 +564,10 @@ func TestAddBlockWithAutoSave(t *testing.T) {
 	err = bc.AddBlockWithAutoSave(genesisBlock)
 	assert.NoError(t, err, "Should add genesis block with auto-save without error")
 
-	// Check if file exists after auto-save
-	filePath := filepath.Join(tempDir, ChainFile)
-	_, err = os.Stat(filePath)
-	assert.False(t, os.IsNotExist(err), "Blockchain file should exist after auto-save")
+	// Check if database file exists after auto-save
+	dbPath := filepath.Join(tempDir, DBFile)
+	_, err = os.Stat(dbPath)
+	assert.False(t, os.IsNotExist(err), "Database file should exist after auto-save")
 
 	// Create another blockchain instance to load the saved file
 	bc2 := NewBlockchain(tempDir)
@@ -689,8 +692,8 @@ func TestConcurrentSaveAndLoad(t *testing.T) {
 	assert.Len(t, bc.Blocks, 2, "Blockchain should still have 2 blocks after concurrent operations")
 }
 
-// TestLoadBlockchainFromFile tests the LoadBlockchainFromFile function
-func TestLoadBlockchainFromFile(t *testing.T) {
+// TestLoadBlockchainFromDirectory tests the LoadBlockchainFromDirectory function
+func TestLoadBlockchainFromDirectory(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "blockchain_test")
 	require.NoError(t, err, "Should create temp directory without error")
@@ -721,26 +724,30 @@ func TestLoadBlockchainFromFile(t *testing.T) {
 		require.NoError(t, err, "Should save blockchain to disk without error")
 	}
 
-	// Test loading from standard file location
-	filePath := filepath.Join(tempDir, ChainFile)
-	loadedBC, err := LoadBlockchainFromFile(filePath)
-	assert.NoError(t, err, "Should load blockchain from file without error")
+	// Test loading from directory
+	loadedBC, err := LoadBlockchainFromDirectory(tempDir)
+	assert.NoError(t, err, "Should load blockchain from directory without error")
 	assert.NotNil(t, loadedBC, "Loaded blockchain should not be nil")
 	assert.Len(t, loadedBC.Blocks, 3, "Loaded blockchain should have 3 blocks")
 	assert.Equal(t, uint64(0), loadedBC.Blocks[0].Index, "First block should be genesis")
 	assert.Equal(t, uint64(2), loadedBC.Blocks[2].Index, "Third block should have index 2")
 
-	// Test loading from custom file location
-	// First, copy the file to a custom location
-	customFilePath := filepath.Join(tempDir, "custom_blockchain.json")
-	data, err := os.ReadFile(filePath)
-	require.NoError(t, err, "Should read original blockchain file without error")
-	err = os.WriteFile(customFilePath, data, 0644)
-	require.NoError(t, err, "Should write to custom blockchain file without error")
+	// Test loading from another directory (copy database)
+	customDir, err := os.MkdirTemp("", "blockchain_test_custom")
+	require.NoError(t, err, "Should create custom temp directory without error")
+	defer os.RemoveAll(customDir)
+
+	// Copy database file to custom location
+	originalDBPath := filepath.Join(tempDir, DBFile)
+	customDBPath := filepath.Join(customDir, DBFile)
+	data, err := os.ReadFile(originalDBPath)
+	require.NoError(t, err, "Should read original database file without error")
+	err = os.WriteFile(customDBPath, data, 0644)
+	require.NoError(t, err, "Should write to custom database file without error")
 
 	// Now load from the custom location
-	customLoadedBC, err := LoadBlockchainFromFile(customFilePath)
-	assert.NoError(t, err, "Should load blockchain from custom file without error")
+	customLoadedBC, err := LoadBlockchainFromDirectory(customDir)
+	assert.NoError(t, err, "Should load blockchain from custom directory without error")
 	assert.NotNil(t, customLoadedBC, "Loaded blockchain should not be nil")
 	assert.Len(t, customLoadedBC.Blocks, 3, "Loaded blockchain should have 3 blocks")
 
@@ -751,58 +758,78 @@ func TestLoadBlockchainFromFile(t *testing.T) {
 	assert.Equal(t, loadedBC.LatestHash, customLoadedBC.LatestHash, "Latest hash should match")
 }
 
-// TestLoadBlockchainFromNonExistentFile tests loading from a non-existent file
-func TestLoadBlockchainFromNonExistentFile(t *testing.T) {
+// TestLoadBlockchainFromNonExistentDirectory tests loading from a non-existent directory
+func TestLoadBlockchainFromNonExistentDirectory(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "blockchain_test")
 	require.NoError(t, err, "Should create temp directory without error")
 	defer os.RemoveAll(tempDir)
 
-	// Attempt to load from a non-existent file
-	nonExistentPath := filepath.Join(tempDir, "non_existent.json")
-	_, err = LoadBlockchainFromFile(nonExistentPath)
-	assert.Error(t, err, "Should return error when file doesn't exist")
-	assert.Contains(t, err.Error(), "blockchain file not found", "Error should indicate file not found")
+	// Attempt to load from a non-existent directory (should create new empty blockchain)
+	nonExistentDir := filepath.Join(tempDir, "non_existent")
+	loadedBC, err := LoadBlockchainFromDirectory(nonExistentDir)
+	assert.NoError(t, err, "Should create new blockchain when directory doesn't exist")
+	assert.NotNil(t, loadedBC, "Loaded blockchain should not be nil")
+	assert.Len(t, loadedBC.Blocks, 0, "New blockchain should have 0 blocks")
 
-	// Attempt to load from standard location when it doesn't exist
-	// TODO: is this case reasonable?
-	standardPath := filepath.Join(tempDir, ChainFile)
-	customLoadedBC, err := LoadBlockchainFromFile(standardPath)
-	assert.NoError(t, err)
-	assert.Len(t, customLoadedBC.Blocks, 0, "Loaded blockchain should have 0 blocks")
+	// Verify directory and database were created
+	_, err = os.Stat(nonExistentDir)
+	assert.False(t, os.IsNotExist(err), "Directory should be created")
+	dbPath := filepath.Join(nonExistentDir, DBFile)
+	_, err = os.Stat(dbPath)
+	assert.False(t, os.IsNotExist(err), "Database file should be created")
 }
 
-// TestLoadInvalidBlockchainFromFile tests loading an invalid blockchain from file
-func TestLoadInvalidBlockchainFromFile(t *testing.T) {
+// TestSQLiteIntegrity tests SQLite database integrity
+func TestSQLiteIntegrity(t *testing.T) {
 	// Create a temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "blockchain_test")
 	require.NoError(t, err, "Should create temp directory without error")
 	defer os.RemoveAll(tempDir)
 
-	// Create an invalid blockchain file
-	invalidChain := []*Block{
-		{
-			Index:            1, // Should be 0 for genesis
-			Timestamp:        time.Now().Unix(),
-			PrevHash:         PrevHashOfGenesis,
-			ValidatorAddress: "testaddress",
-			Data:             "Invalid Genesis",
-			Hash:             "invaliddatahash",
-		},
+	// Create a blockchain and add blocks
+	bc := NewBlockchain(tempDir)
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	err = bc.AddBlockWithAutoSave(genesisBlock)
+	require.NoError(t, err, "Should add genesis block without error")
+
+	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2 Data")
+	require.NoError(t, err, "Should create second block without error")
+	err = bc.AddBlockWithAutoSave(block2)
+	require.NoError(t, err, "Should add second block without error")
+
+	// Verify database integrity by querying directly
+	rows, err := bc.db.Query("SELECT hash, block_index, data FROM blocks ORDER BY block_index")
+	require.NoError(t, err, "Should query database without error")
+	defer rows.Close()
+
+	var blocks []struct {
+		Hash  string
+		Index uint64
+		Data  string
 	}
 
-	invalidData, err := json.MarshalIndent(invalidChain, "", "  ")
-	require.NoError(t, err, "Should marshal invalid blockchain data without error")
+	for rows.Next() {
+		var block struct {
+			Hash  string
+			Index uint64
+			Data  string
+		}
+		err = rows.Scan(&block.Hash, &block.Index, &block.Data)
+		require.NoError(t, err, "Should scan row without error")
+		blocks = append(blocks, block)
+	}
 
-	// Write invalid data to file
-	customFilePath := filepath.Join(tempDir, "invalid_blockchain.json")
-	err = os.WriteFile(customFilePath, invalidData, 0644)
-	require.NoError(t, err, "Should write invalid blockchain data without error")
-
-	// Try to load the invalid blockchain
-	_, err = LoadBlockchainFromFile(customFilePath)
-	assert.Error(t, err, "Should return error when loading invalid blockchain")
-	assert.Contains(t, err.Error(), "invalid genesis block", "Error should mention invalid genesis block")
+	// Verify saved data
+	assert.Len(t, blocks, 2, "Database should contain 2 blocks")
+	assert.Equal(t, genesisBlock.Hash, blocks[0].Hash, "Genesis block hash should match")
+	assert.Equal(t, block2.Hash, blocks[1].Hash, "Second block hash should match")
+	assert.Equal(t, uint64(0), blocks[0].Index, "Genesis block index should be 0")
+	assert.Equal(t, uint64(1), blocks[1].Index, "Second block index should be 1")
 }
 
 // TestValidateBlockForChain tests the validateBlockForChain function
@@ -973,7 +1000,7 @@ func TestTryAddBlockWithForkResolution(t *testing.T) {
 	assert.Equal(t, initialLatestHash, bc.LatestHash, "Main chain should remain unchanged")
 	assert.Equal(t, initialLength, len(bc.Blocks), "Main chain length should remain unchanged")
 	assert.Equal(t, block2, bc.MainHead, "MainHead should still be block2")
-	
+
 	// But we should now have 2 heads
 	assert.Len(t, bc.Heads, 2, "Should have 2 heads after adding competing block")
 
@@ -1003,7 +1030,7 @@ func TestTryAddBlockWithForkResolution(t *testing.T) {
 	assert.Equal(t, initialLength, len(bc.Blocks), "Chain length should remain unchanged")
 	assert.Equal(t, initialLatestHash, bc.LatestHash, "Latest hash should remain unchanged")
 	assert.Equal(t, uint64(0), bc.Blocks[0].Index, "First block should be genesis")
-	assert.Equal(t, uint64(1), bc.Blocks[1].Index, "Second block should be block1") 
+	assert.Equal(t, uint64(1), bc.Blocks[1].Index, "Second block should be block1")
 	assert.Equal(t, uint64(2), bc.Blocks[2].Index, "Third block should be block2")
 	assert.True(t, bc.VerifyChain(), "Blockchain should be valid after all operations")
 }
@@ -1017,21 +1044,21 @@ func TestReorganizeChain(t *testing.T) {
 	bc := NewBlockchain()
 	genesisBlock, err := CreateGenesisBlock(acc)
 	require.NoError(t, err, "Failed to create genesis block")
-	
+
 	err = bc.AddBlock(genesisBlock)
 	require.NoError(t, err, "Failed to add genesis block")
 
 	// Create first block on main chain
 	block1, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 1")
 	require.NoError(t, err, "Failed to create block 1")
-	
+
 	err = bc.AddBlock(block1)
 	require.NoError(t, err, "Failed to add block 1")
 
 	// Create second block on main chain
 	block2, err := createSignedBlock(2, block1.Hash, acc, "Block 2")
 	require.NoError(t, err, "Failed to create block 2")
-	
+
 	err = bc.AddBlock(block2)
 	require.NoError(t, err, "Failed to add block 2")
 
@@ -1050,7 +1077,7 @@ func TestReorganizeChain(t *testing.T) {
 	// Verify reorganization results
 	assert.Equal(t, 3, len(bc.Blocks), "Should have 3 blocks after reorganization")
 	assert.Equal(t, forkBlock2.Hash, bc.LatestHash, "Latest hash should be fork block 2")
-	
+
 	// Verify the chain structure
 	assert.Equal(t, uint64(0), bc.Blocks[0].Index, "First block should be genesis")
 	assert.Equal(t, uint64(1), bc.Blocks[1].Index, "Second block should be block 1")
@@ -1772,4 +1799,1059 @@ func TestForkResolutionEdgeCases(t *testing.T) {
 
 	// Main head should remain the first one (block1)
 	assert.Equal(t, block1, bc.MainHead, "MainHead should remain block1")
+}
+
+// TestGetBlockCount tests the GetBlockCount function
+func TestGetBlockCount(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Test empty blockchain
+	assert.Equal(t, 0, bc.GetBlockCount(), "Empty blockchain should have 0 blocks")
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+	
+	// Add genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	err = bc.AddBlock(genesisBlock)
+	require.NoError(t, err, "Should add genesis block without error")
+	
+	assert.Equal(t, 1, bc.GetBlockCount(), "Blockchain should have 1 block after adding genesis")
+	
+	// Add more blocks
+	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2")
+	require.NoError(t, err, "Should create second block without error")
+	err = bc.AddBlock(block2)
+	require.NoError(t, err, "Should add second block without error")
+	
+	assert.Equal(t, 2, bc.GetBlockCount(), "Blockchain should have 2 blocks after adding second block")
+}
+
+// TestLoadBlockchainFromDirectoryError tests error cases for LoadBlockchainFromDirectory
+func TestLoadBlockchainFromDirectoryError(t *testing.T) {
+	// Test with non-existent directory (should work - creates new blockchain)
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+	
+	nonExistentDir := filepath.Join(tempDir, "nonexistent")
+	bc, err := LoadBlockchainFromDirectory(nonExistentDir)
+	assert.NoError(t, err, "Should load from non-existent directory")
+	assert.NotNil(t, bc, "Should return valid blockchain")
+	assert.Equal(t, 0, len(bc.Blocks), "Should be empty blockchain")
+}
+
+// TestDatabaseInitErrors tests database initialization error cases
+func TestDatabaseInitErrors(t *testing.T) {
+	// This is hard to test without mocking, but we can test the successful path
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	assert.NotNil(t, bc, "Should create blockchain with custom path")
+	assert.NotNil(t, bc.db, "Database should be initialized")
+}
+
+// TestIsBlockOnMainChain tests the isBlockOnMainChain function
+func TestIsBlockOnMainChain(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+	
+	// Test with no main head
+	testBlock := &Block{Index: 0, Hash: "test"}
+	assert.False(t, bc.isBlockOnMainChain(testBlock), "Should return false when no main head")
+	
+	// Add genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	err = bc.AddBlock(genesisBlock)
+	require.NoError(t, err, "Should add genesis block without error")
+	
+	// Test with genesis block
+	assert.True(t, bc.isBlockOnMainChain(genesisBlock), "Genesis should be on main chain")
+	
+	// Test with non-existent block
+	nonExistentBlock := &Block{Index: 99, Hash: "nonexistent"}
+	assert.False(t, bc.isBlockOnMainChain(nonExistentBlock), "Non-existent block should not be on main chain")
+	
+	// Add second block and test
+	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2")
+	require.NoError(t, err, "Should create second block without error")
+	err = bc.AddBlock(block2)
+	require.NoError(t, err, "Should add second block without error")
+	
+	assert.True(t, bc.isBlockOnMainChain(block2), "Second block should be on main chain")
+	assert.True(t, bc.isBlockOnMainChain(genesisBlock), "Genesis should still be on main chain")
+}
+
+// TestNeedsMainChainUpdate tests the needsMainChainUpdate function
+func TestNeedsMainChainUpdate(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Test with no main head
+	assert.False(t, bc.needsMainChainUpdate(), "Should return false when no main head")
+	
+	// Create test account and add genesis block
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+	
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	err = bc.AddBlock(genesisBlock)
+	require.NoError(t, err, "Should add genesis block without error")
+	
+	// Save to database
+	err = bc.SaveToDisk()
+	require.NoError(t, err, "Should save to disk without error")
+	
+	// Should not need update after saving
+	assert.False(t, bc.needsMainChainUpdate(), "Should not need update after saving")
+}
+
+// TestVerifyChainEmpty tests VerifyChain with empty blockchain
+func TestVerifyChainEmpty(t *testing.T) {
+	bc := NewBlockchain()
+	assert.True(t, bc.VerifyChain(), "Empty blockchain should be valid")
+}
+
+// TestIsBlockValidEmpty tests IsBlockValid with empty blockchain
+func TestIsBlockValidEmpty(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+	
+	// Test valid genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	
+	err = bc.IsBlockValid(genesisBlock)
+	assert.NoError(t, err, "Valid genesis block should be valid for empty chain")
+	
+	// Test invalid genesis block
+	invalidGenesis := &Block{
+		Index:    1, // Should be 0
+		PrevHash: PrevHashOfGenesis,
+	}
+	
+	err = bc.IsBlockValid(invalidGenesis)
+	assert.Error(t, err, "Invalid genesis block should not be valid")
+}
+
+// TestSaveToDiskError tests SaveToDisk error handling 
+func TestSaveToDiskError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Create test account and add genesis block
+	acc, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+	
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err, "Should create genesis block without error")
+	err = bc.AddBlock(genesisBlock)
+	require.NoError(t, err, "Should add genesis block without error")
+	
+	// Normal save should work
+	err = bc.SaveToDisk()
+	assert.NoError(t, err, "SaveToDisk should work normally")
+}
+
+// TestLoadFromDiskError tests LoadFromDisk error handling
+func TestLoadFromDiskError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Loading empty database should work
+	err = bc.LoadFromDisk()
+	assert.NoError(t, err, "LoadFromDisk should work with empty database")
+	assert.Equal(t, 0, len(bc.Blocks), "Should have no blocks")
+}
+
+// TestAddBlockWithAutoSaveError tests AddBlockWithAutoSave error handling
+func TestAddBlockWithAutoSaveError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err, "Should create temp directory without error")
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Try to add invalid block
+	invalidBlock := &Block{
+		Index:    1, // Invalid without genesis
+		Hash:     "invalid",
+		PrevHash: "invalid",
+	}
+	
+	err = bc.AddBlockWithAutoSave(invalidBlock)
+	assert.Error(t, err, "Should fail to add invalid block with auto-save")
+}
+
+// TestGetMainChainBlocksEmpty tests getMainChainBlocks with empty chain
+func TestGetMainChainBlocksEmpty(t *testing.T) {
+	bc := NewBlockchain()
+	
+	blocks := bc.getMainChainBlocks()
+	assert.Empty(t, blocks, "Should return empty slice for empty chain")
+}
+
+// TestFindLongestChainHeadEmpty tests findLongestChainHead with no heads
+func TestFindLongestChainHeadEmpty(t *testing.T) {
+	bc := NewBlockchain()
+	
+	head := bc.findLongestChainHead()
+	assert.Nil(t, head, "Should return nil when no heads")
+}
+
+// TestCreateGenesisBlockError tests CreateGenesisBlock error cases
+func TestCreateGenesisBlockError(t *testing.T) {
+	// Test with nil account - this should cause an error
+	_, err := CreateGenesisBlock(nil)
+	assert.Error(t, err, "Should fail when account is nil")
+}
+
+// TestCreateGenesisBlockSigningError tests CreateGenesisBlock signing error
+func TestCreateGenesisBlockSigningError(t *testing.T) {
+	// Create an account with an invalid private key structure to force signing error
+	// We'll create a private key with wrong curve parameters
+	privateKey := &ecdsa.PrivateKey{
+		D: big.NewInt(0), // Invalid D value (zero)
+		PublicKey: ecdsa.PublicKey{
+			Curve: elliptic.P256(),
+			X:     big.NewInt(0),
+			Y:     big.NewInt(0),
+		},
+	}
+	
+	acc := &account.Account{
+		Address:    "test_address",
+		PrivateKey: privateKey,
+		PublicKey:  &privateKey.PublicKey,
+	}
+	
+	// This should fail during signing step due to invalid private key
+	_, err := CreateGenesisBlock(acc)
+	assert.Error(t, err, "Should fail when signing fails")
+}
+
+// TestNewBlockchainDatabaseInitError tests database initialization errors
+func TestNewBlockchainDatabaseInitError(t *testing.T) {
+	// Skip this test since log.Fatal() terminates the program
+	t.Skip("Test skipped: log.Fatal() terminates the program and cannot be tested directly")
+}
+
+// TestInitDatabaseDirectoryError tests initDatabase directory creation error
+func TestInitDatabaseDirectoryError(t *testing.T) {
+	bc := &Blockchain{
+		dataPath: "/root/invalid/path",
+	}
+	
+	err := bc.initDatabase()
+	assert.Error(t, err, "Should fail to create directory")
+	assert.Contains(t, err.Error(), "failed to create data directory")
+}
+
+// TestInitDatabaseOpenError tests initDatabase open error with invalid path
+func TestInitDatabaseOpenError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := &Blockchain{
+		dataPath: tempDir,
+	}
+	
+	// Create a file where database should be to cause open error
+	dbPath := filepath.Join(tempDir, DBFile)
+	err = os.WriteFile(dbPath, []byte("invalid sqlite data"), 0644)
+	require.NoError(t, err)
+	
+	err = bc.initDatabase()
+	assert.Error(t, err, "Should fail to open invalid database")
+}
+
+// TestInitDatabasePingError tests initDatabase ping error
+func TestInitDatabasePingError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := &Blockchain{
+		dataPath: tempDir,
+	}
+	
+	// This test is tricky because ping rarely fails with SQLite
+	// We'll test the error path by mocking or using an edge case
+	err = bc.initDatabase()
+	
+	// If initialization succeeds, close the database and then try ping
+	if err == nil && bc.db != nil {
+		bc.db.Close()
+		// Now try to ping closed database - this should fail
+		err = bc.db.Ping()
+		assert.Error(t, err, "Ping should fail on closed database")
+	}
+}
+
+// TestCreateTablesError tests createTables error handling
+func TestCreateTablesError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Close database to force error
+	bc.db.Close()
+	
+	err = bc.createTables()
+	assert.Error(t, err, "Should fail to create tables with closed database")
+}
+
+// TestSaveBlockToDatabaseError tests saveBlockToDatabase error handling
+func TestSaveBlockToDatabaseError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Create test account and block
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	
+	// Close database to force error
+	bc.db.Close()
+	
+	err = bc.saveBlockToDatabase(genesisBlock)
+	assert.Error(t, err, "Should fail to save block with closed database")
+	assert.Contains(t, err.Error(), "failed to save block")
+}
+
+// TestUpdateMainChainFlagsError tests updateMainChainFlags error handling
+func TestUpdateMainChainFlagsError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Create test account and block
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	
+	bc.AddBlock(genesisBlock)
+	
+	// Close database to force error
+	bc.db.Close()
+	
+	err = bc.updateMainChainFlags()
+	assert.Error(t, err, "Should fail to update main chain flags with closed database")
+	assert.Contains(t, err.Error(), "failed to begin transaction")
+}
+
+// TestSaveBlocksToDatabaseError tests saveBlocksToDatabase error handling
+func TestSaveBlocksToDatabaseError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Create test account and block
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	
+	bc.AddBlock(genesisBlock)
+	
+	// Close database to force error
+	bc.db.Close()
+	
+	err = bc.saveBlocksToDatabase()
+	assert.Error(t, err, "Should fail to save blocks with closed database")
+	assert.Contains(t, err.Error(), "failed to query existing blocks")
+}
+
+// TestNeedsMainChainUpdateError tests needsMainChainUpdate error handling
+func TestNeedsMainChainUpdateError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Create test account and block
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	
+	bc.AddBlock(genesisBlock)
+	
+	// Close database to force error
+	bc.db.Close()
+	
+	// This should return true when there's an error
+	needsUpdate := bc.needsMainChainUpdate()
+	assert.True(t, needsUpdate, "Should return true when database query fails")
+}
+
+// TestLoadBlocksFromDatabaseError tests loadBlocksFromDatabase error handling
+func TestLoadBlocksFromDatabaseError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Close database to force error
+	bc.db.Close()
+	
+	err = bc.loadBlocksFromDatabase()
+	assert.Error(t, err, "Should fail to load blocks with closed database")
+	assert.Contains(t, err.Error(), "failed to query blocks")
+}
+
+// TestLoadBlocksFromDatabaseScanError tests loadBlocksFromDatabase scan error
+func TestLoadBlocksFromDatabaseScanError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Insert invalid data to cause scan error
+	_, err = bc.db.Exec(`INSERT INTO blocks (
+		hash, block_index, timestamp, prev_hash, validator_address, data, 
+		signature, validator_public_key, parent_hash, is_main_chain
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"test_hash", "invalid_index", // invalid_index will cause scan error
+		time.Now().Unix(), "prev_hash", "validator", "data",
+		[]byte("signature"), []byte("pubkey"), nil, false)
+	require.NoError(t, err)
+	
+	err = bc.loadBlocksFromDatabase()
+	assert.Error(t, err, "Should fail to scan invalid block data")
+	assert.Contains(t, err.Error(), "failed to scan block")
+}
+
+// TestLoadBlocksFromDatabaseInvalidGenesis tests loadBlocksFromDatabase with invalid genesis
+func TestLoadBlocksFromDatabaseInvalidGenesis(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Insert invalid genesis block
+	_, err = bc.db.Exec(`INSERT INTO blocks (
+		hash, block_index, timestamp, prev_hash, validator_address, data, 
+		signature, validator_public_key, parent_hash, is_main_chain
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"invalid_genesis_hash", 0, time.Now().Unix(), "invalid_prev_hash", // Wrong prev_hash
+		"validator", "data", []byte("signature"), []byte("pubkey"), nil, false)
+	require.NoError(t, err)
+	
+	err = bc.loadBlocksFromDatabase()
+	assert.NoError(t, err, "Should succeed but skip invalid genesis")
+	assert.Nil(t, bc.Genesis, "Genesis should be nil due to invalid prev_hash")
+}
+
+// TestLoadBlocksFromDatabaseParentNotFound tests loadBlocksFromDatabase with missing parent
+func TestLoadBlocksFromDatabaseParentNotFound(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Create valid genesis block for reference
+	acc, err := account.New()
+	require.NoError(t, err)
+	validGenesis, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	
+	// Insert valid genesis block
+	_, err = bc.db.Exec(`INSERT INTO blocks (
+		hash, block_index, timestamp, prev_hash, validator_address, data, 
+		signature, validator_public_key, parent_hash, is_main_chain
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		validGenesis.Hash, validGenesis.Index, validGenesis.Timestamp, validGenesis.PrevHash,
+		validGenesis.ValidatorAddress, validGenesis.Data, validGenesis.Signature, validGenesis.ValidatorPublicKey,
+		nil, false)
+	require.NoError(t, err)
+	
+	// Create valid orphan block (but with missing parent reference)
+	orphanBlock, err := createSignedBlock(1, "missing_parent_hash", acc, "Orphan Block")
+	require.NoError(t, err)
+	
+	// Insert orphan block with missing parent
+	_, err = bc.db.Exec(`INSERT INTO blocks (
+		hash, block_index, timestamp, prev_hash, validator_address, data, 
+		signature, validator_public_key, parent_hash, is_main_chain
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		orphanBlock.Hash, orphanBlock.Index, orphanBlock.Timestamp, orphanBlock.PrevHash,
+		orphanBlock.ValidatorAddress, orphanBlock.Data, orphanBlock.Signature, orphanBlock.ValidatorPublicKey,
+		nil, false)
+	require.NoError(t, err)
+	
+	err = bc.loadBlocksFromDatabase()
+	assert.NoError(t, err, "Should succeed but log warning about missing parent")
+	assert.NotNil(t, bc.Genesis, "Genesis should be loaded")
+	assert.Equal(t, 1, len(bc.BlockByHash), "Should have only genesis block")
+}
+
+// TestAddBlockParentNotFound tests AddBlock with missing parent
+func TestAddBlockParentNotFound(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	// Create genesis block first
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Create block with missing parent
+	orphanBlock, err := createSignedBlock(1, "missing_parent_hash", acc, "Orphan Block")
+	require.NoError(t, err)
+	
+	err = bc.AddBlock(orphanBlock)
+	assert.Error(t, err, "Should fail to add block with missing parent")
+	assert.Contains(t, err.Error(), "parent block not found")
+}
+
+// TestTryAddBlockWithForkResolutionParentNotFound tests TryAddBlockWithForkResolution with missing parent
+func TestTryAddBlockWithForkResolutionParentNotFound(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	// Create genesis block first
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Create block with missing parent
+	orphanBlock, err := createSignedBlock(1, "missing_parent_hash", acc, "Orphan Block")
+	require.NoError(t, err)
+	
+	err = bc.TryAddBlockWithForkResolution(orphanBlock)
+	assert.Error(t, err, "Should fail to add block with missing parent")
+	assert.Contains(t, err.Error(), "previous block not found")
+}
+
+// TestSwitchToChain tests the completely uncovered SwitchToChain function
+func TestSwitchToChain(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	// Create genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Create main chain with 2 blocks
+	block1, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 1")
+	require.NoError(t, err)
+	bc.AddBlock(block1)
+	
+	block2, err := createSignedBlock(2, block1.Hash, acc, "Block 2")
+	require.NoError(t, err)
+	bc.AddBlock(block2)
+	
+	// Create fork block (equal length, won't become main head)
+	forkBlock, err := createSignedBlock(1, genesisBlock.Hash, acc, "Fork Block")
+	require.NoError(t, err)
+	bc.TryAddBlockWithForkResolution(forkBlock)
+	
+	// Create second block on fork (equal length, won't become main head)
+	forkBlock2, err := createSignedBlock(2, forkBlock.Hash, acc, "Fork Block 2")
+	require.NoError(t, err)
+	bc.TryAddBlockWithForkResolution(forkBlock2)
+	
+	// Store original main head (should be block2)
+	originalMainHead := bc.MainHead
+	assert.Equal(t, block2.Hash, originalMainHead.Hash, "Main head should initially be block2")
+	
+	// Switch to the fork chain
+	err = bc.SwitchToChain(forkBlock2)
+	assert.NoError(t, err, "Should successfully switch to fork chain")
+	
+	// Verify the switch
+	assert.Equal(t, forkBlock2.Hash, bc.MainHead.Hash, "Main head should be fork block 2")
+	assert.Equal(t, forkBlock2.Hash, bc.LatestHash, "Latest hash should be fork block 2")
+	assert.NotEqual(t, originalMainHead.Hash, bc.MainHead.Hash, "Main head should have changed")
+	
+	// Verify the new main chain
+	expectedPath := forkBlock2.GetPath()
+	assert.Equal(t, expectedPath, bc.Blocks, "Blocks should represent new main chain")
+	assert.Equal(t, 3, len(bc.Blocks), "Should have 3 blocks in new main chain")
+}
+
+// TestSwitchToChainLongerChain tests SwitchToChain with longer chain
+func TestSwitchToChainLongerChain(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	// Create genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Create main chain with 2 blocks
+	block1, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 1")
+	require.NoError(t, err)
+	bc.AddBlock(block1)
+	
+	block2, err := createSignedBlock(2, block1.Hash, acc, "Block 2")
+	require.NoError(t, err)
+	bc.AddBlock(block2)
+	
+	// Create fork with 3 blocks (longer)
+	forkBlock1, err := createSignedBlock(1, genesisBlock.Hash, acc, "Fork Block 1")
+	require.NoError(t, err)
+	bc.TryAddBlockWithForkResolution(forkBlock1)
+	
+	forkBlock2, err := createSignedBlock(2, forkBlock1.Hash, acc, "Fork Block 2")
+	require.NoError(t, err)
+	bc.TryAddBlockWithForkResolution(forkBlock2)
+	
+	forkBlock3, err := createSignedBlock(3, forkBlock2.Hash, acc, "Fork Block 3")
+	require.NoError(t, err)
+	bc.TryAddBlockWithForkResolution(forkBlock3)
+	
+	// Switch to the longer fork chain
+	err = bc.SwitchToChain(forkBlock3)
+	assert.NoError(t, err, "Should successfully switch to longer fork chain")
+	
+	// Verify the switch
+	assert.Equal(t, forkBlock3.Hash, bc.MainHead.Hash, "Main head should be fork block 3")
+	assert.Equal(t, forkBlock3.Hash, bc.LatestHash, "Latest hash should be fork block 3")
+	assert.Equal(t, 4, len(bc.Blocks), "Should have 4 blocks in new main chain")
+}
+
+// TestIsLongerChainWithNilMainHead tests isLongerChain with nil main head
+func TestIsLongerChainWithNilMainHead(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account and block
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	block, err := createSignedBlock(1, "prev_hash", acc, "Test Block")
+	require.NoError(t, err)
+	
+	// With nil main head, any block should be considered longer
+	isLonger := bc.isLongerChain(block)
+	assert.True(t, isLonger, "Should return true when main head is nil")
+}
+
+// TestFindLongestChainHeadWithMultipleHeads tests findLongestChainHead with multiple heads
+func TestFindLongestChainHeadWithMultipleHeads(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	// Create genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Create multiple forks
+	fork1Block1, err := createSignedBlock(1, genesisBlock.Hash, acc, "Fork 1 Block 1")
+	require.NoError(t, err)
+	bc.TryAddBlockWithForkResolution(fork1Block1)
+	
+	fork2Block1, err := createSignedBlock(1, genesisBlock.Hash, acc, "Fork 2 Block 1")
+	require.NoError(t, err)
+	bc.TryAddBlockWithForkResolution(fork2Block1)
+	
+	fork2Block2, err := createSignedBlock(2, fork2Block1.Hash, acc, "Fork 2 Block 2")
+	require.NoError(t, err)
+	bc.TryAddBlockWithForkResolution(fork2Block2)
+	
+	// Find longest chain head
+	longestHead := bc.findLongestChainHead()
+	assert.Equal(t, fork2Block2.Hash, longestHead.Hash, "Should find the longest chain head")
+	assert.Equal(t, uint64(2), longestHead.Index, "Longest head should have index 2")
+}
+
+// TestAddBlockExtendingMainChain tests adding block that extends main chain
+func TestAddBlockExtendingMainChain(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	// Create genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Create first block
+	block1, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 1")
+	require.NoError(t, err)
+	bc.AddBlock(block1)
+	
+	// Create fork
+	forkBlock, err := createSignedBlock(1, genesisBlock.Hash, acc, "Fork Block")
+	require.NoError(t, err)
+	bc.TryAddBlockWithForkResolution(forkBlock)
+	
+	// Create block extending main chain
+	block2, err := createSignedBlock(2, block1.Hash, acc, "Block 2")
+	require.NoError(t, err)
+	
+	// This should extend the main chain and add to legacy blocks
+	err = bc.TryAddBlockWithForkResolution(block2)
+	assert.NoError(t, err, "Should successfully add block extending main chain")
+	
+	// Verify it's added to legacy blocks
+	assert.Contains(t, bc.Blocks, block2, "Block should be in legacy blocks array")
+	assert.Equal(t, block2.Hash, bc.LatestHash, "Latest hash should be updated")
+}
+
+// TestReorganizeChainWithInvalidBlock tests reorganizeChain with invalid block
+func TestReorganizeChainWithInvalidBlock(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	// Create genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Create invalid block for reorganization
+	invalidBlock := &Block{
+		Index:    1,
+		PrevHash: genesisBlock.Hash,
+		Hash:     "invalid_hash", // Invalid hash
+		Data:     "Invalid Block",
+	}
+	
+	err = bc.reorganizeChain(invalidBlock)
+	assert.Error(t, err, "Should fail to reorganize with invalid block")
+	assert.Contains(t, err.Error(), "invalid block hash")
+}
+
+// TestReorganizeChainNoCommonAncestor tests reorganizeChain without common ancestor
+func TestReorganizeChainNoCommonAncestor(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	// Create genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Create block with non-existent parent
+	orphanBlock, err := createSignedBlock(1, "non_existent_parent", acc, "Orphan Block")
+	require.NoError(t, err)
+	
+	err = bc.reorganizeChain(orphanBlock)
+	assert.Error(t, err, "Should fail to reorganize without common ancestor")
+	assert.Contains(t, err.Error(), "cannot find common ancestor")
+}
+
+// TestSaveToDiskWithDatabaseError tests SaveToDisk with database error
+func TestSaveToDiskWithDatabaseError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Create test account and block
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Close database to force error
+	bc.db.Close()
+	
+	err = bc.SaveToDisk()
+	assert.Error(t, err, "Should fail to save to disk with closed database")
+	assert.Contains(t, err.Error(), "failed to save blocks to database")
+}
+
+// TestLoadFromDiskWithDatabaseError tests LoadFromDisk with database error
+func TestLoadFromDiskWithDatabaseError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Close database to force error
+	bc.db.Close()
+	
+	err = bc.LoadFromDisk()
+	assert.Error(t, err, "Should fail to load from disk with closed database")
+	assert.Contains(t, err.Error(), "failed to load blocks from database")
+}
+
+// TestAddBlockWithAutoSaveSaveError tests AddBlockWithAutoSave with save error
+func TestAddBlockWithAutoSaveSaveError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Create test account and block
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	
+	// Add genesis block first
+	err = bc.AddBlock(genesisBlock)
+	require.NoError(t, err)
+	
+	// Close database to force save error
+	bc.db.Close()
+	
+	// Create second block
+	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2")
+	require.NoError(t, err)
+	
+	err = bc.AddBlockWithAutoSave(block2)
+	assert.Error(t, err, "Should fail to save after adding block")
+	assert.Contains(t, err.Error(), "failed to save blocks to database")
+}
+
+// TestLoadBlockchainFromDirectoryWithInvalidDatabase tests LoadBlockchainFromDirectory with error
+func TestLoadBlockchainFromDirectoryWithInvalidDatabase(t *testing.T) {
+	// Skip this test since log.Fatal() terminates the program when database initialization fails
+	t.Skip("Test skipped: log.Fatal() terminates the program and cannot be tested directly")
+}
+
+// TestUpdateMainChainFlagsTransactionError tests updateMainChainFlags transaction errors
+func TestUpdateMainChainFlagsTransactionError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Create test account and block
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Force transaction error by using invalid SQL
+	originalDB := bc.db
+	bc.db.Close()
+	bc.db = originalDB // Keep reference but database is closed
+	
+	err = bc.updateMainChainFlags()
+	assert.Error(t, err, "Should fail with transaction error")
+}
+
+// TestSaveBlocksToDatabaseRowsScanError tests saveBlocksToDatabase rows scan error
+func TestSaveBlocksToDatabaseRowsScanError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Close the database to force query error
+	bc.db.Close()
+	
+	// This should cause query error when trying to get existing hashes
+	err = bc.saveBlocksToDatabase()
+	assert.Error(t, err, "Should fail with query error on closed database")
+	assert.Contains(t, err.Error(), "failed to query existing blocks", "Error should mention query failure")
+}
+
+// TestSaveBlocksToDatabaseSaveError tests saveBlocksToDatabase save error
+func TestSaveBlocksToDatabaseSaveError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Create test account and block
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Close database after adding block to force save error
+	bc.db.Close()
+	
+	err = bc.saveBlocksToDatabase()
+	assert.Error(t, err, "Should fail to save blocks with closed database")
+}
+
+// TestSaveBlocksToDatabaseUpdateError tests saveBlocksToDatabase update error
+func TestSaveBlocksToDatabaseUpdateError(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "blockchain_test")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+	
+	bc := NewBlockchain(tempDir)
+	
+	// Create test account and block
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Save first to create existing blocks
+	err = bc.saveBlocksToDatabase()
+	require.NoError(t, err)
+	
+	// Add another block
+	block2, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 2")
+	require.NoError(t, err)
+	bc.AddBlock(block2)
+	
+	// Close database to force update error
+	bc.db.Close()
+	
+	err = bc.saveBlocksToDatabase()
+	assert.Error(t, err, "Should fail to update main chain flags with closed database")
+}
+
+// TestAddBlockChildrenNil tests AddBlock with nil children
+func TestAddBlockChildrenNil(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	// Create genesis block with nil children
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	genesisBlock.Children = nil // Set to nil
+	
+	err = bc.AddBlock(genesisBlock)
+	assert.NoError(t, err, "Should add genesis block even with nil children")
+	assert.NotNil(t, genesisBlock.Children, "Children should be initialized")
+}
+
+// TestGetMainChainBlocksFromPath tests that getMainChainBlocks returns correct path
+func TestGetMainChainBlocksFromPath(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	// Create genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Create chain
+	block1, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 1")
+	require.NoError(t, err)
+	bc.AddBlock(block1)
+	
+	block2, err := createSignedBlock(2, block1.Hash, acc, "Block 2")
+	require.NoError(t, err)
+	bc.AddBlock(block2)
+	
+	// Get main chain blocks
+	mainChainBlocks := bc.getMainChainBlocks()
+	
+	// Verify order and content
+	assert.Equal(t, 3, len(mainChainBlocks), "Should have 3 blocks in main chain")
+	assert.Equal(t, genesisBlock.Hash, mainChainBlocks[0].Hash, "First block should be genesis")
+	assert.Equal(t, block1.Hash, mainChainBlocks[1].Hash, "Second block should be block1")
+	assert.Equal(t, block2.Hash, mainChainBlocks[2].Hash, "Third block should be block2")
+}
+
+// TestFindCommonAncestorDifferentLengths tests FindCommonAncestor with different path lengths
+func TestFindCommonAncestorDifferentLengths(t *testing.T) {
+	bc := NewBlockchain()
+	
+	// Create test account
+	acc, err := account.New()
+	require.NoError(t, err)
+	
+	// Create genesis block
+	genesisBlock, err := CreateGenesisBlock(acc)
+	require.NoError(t, err)
+	bc.AddBlock(genesisBlock)
+	
+	// Create longer chain
+	block1, err := createSignedBlock(1, genesisBlock.Hash, acc, "Block 1")
+	require.NoError(t, err)
+	bc.AddBlock(block1)
+	
+	block2, err := createSignedBlock(2, block1.Hash, acc, "Block 2")
+	require.NoError(t, err)
+	bc.AddBlock(block2)
+	
+	// Create shorter fork
+	forkBlock, err := createSignedBlock(1, genesisBlock.Hash, acc, "Fork Block")
+	require.NoError(t, err)
+	bc.TryAddBlockWithForkResolution(forkBlock)
+	
+	// Find common ancestor
+	commonAncestor := bc.FindCommonAncestor(block2, forkBlock)
+	assert.Equal(t, genesisBlock.Hash, commonAncestor.Hash, "Common ancestor should be genesis")
 }

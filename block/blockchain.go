@@ -1,18 +1,21 @@
 package block
 
 import (
+	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"weather-blockchain/logger"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const (
 	DataDirectory = "./data"
-	ChainFile     = "blockchain.json"
+	DBFile        = "blockchain.db"
 )
 
 // Blockchain represents the tree-based blockchain data structure
@@ -22,13 +25,14 @@ type Blockchain struct {
 	BlockByHash map[string]*Block
 	Heads       []*Block // All chain tips
 	MainHead    *Block   // Current longest chain head
-	
-	// Legacy support - will be deprecated
+
+	// Legacy support - maintained for backward compatibility
 	Blocks     []*Block
 	LatestHash string
-	
+
 	mutex    sync.RWMutex
 	dataPath string
+	db       *sql.DB // SQLite database connection
 }
 
 func (blockchain *Blockchain) GetBlockCount() int {
@@ -56,16 +60,461 @@ func NewBlockchain(dataPath ...string) *Blockchain {
 		BlockByHash: make(map[string]*Block),
 		Heads:       make([]*Block, 0),
 		MainHead:    nil,
-		
+
 		// Legacy support
 		Blocks:     make([]*Block, 0),
 		LatestHash: "",
-		
+
 		dataPath: path,
 	}
 
-	log.Info("New tree-based blockchain instance created")
+	// Initialize database - fail fast if database is unavailable
+	if err := blockchain.initDatabase(); err != nil {
+		log.WithError(err).Fatal("Failed to initialize database - terminating application")
+	}
+
+	log.Info("New tree-based blockchain instance created with SQLite storage")
 	return blockchain
+}
+
+// initDatabase initializes the SQLite database and creates necessary tables
+func (blockchain *Blockchain) initDatabase() error {
+	log.Debug("Initializing SQLite database")
+
+	// Create data directory if it doesn't exist
+	err := os.MkdirAll(blockchain.dataPath, 0755)
+	if err != nil {
+		return fmt.Errorf("failed to create data directory: %w", err)
+	}
+
+	// Open database connection
+	dbPath := filepath.Join(blockchain.dataPath, DBFile)
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+
+	// Test connection
+	if err = db.Ping(); err != nil {
+		db.Close()
+		return fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	blockchain.db = db
+
+	// Create tables if they don't exist
+	err = blockchain.createTables()
+	if err != nil {
+		db.Close()
+		return fmt.Errorf("failed to create tables: %w", err)
+	}
+
+	log.WithField("dbPath", dbPath).Info("SQLite database initialized successfully")
+	return nil
+}
+
+// createTables creates the necessary database tables if they don't exist
+func (blockchain *Blockchain) createTables() error {
+	log.Debug("Creating database tables if needed")
+
+	// Create blocks table
+	createBlocksSQL := `
+	CREATE TABLE IF NOT EXISTS blocks (
+		hash TEXT PRIMARY KEY,
+		block_index INTEGER NOT NULL,
+		timestamp INTEGER NOT NULL,
+		prev_hash TEXT,
+		validator_address TEXT,
+		data TEXT,
+		signature BLOB,
+		validator_public_key BLOB,
+		parent_hash TEXT,
+		is_main_chain BOOLEAN DEFAULT FALSE,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (parent_hash) REFERENCES blocks(hash)
+	);`
+
+	_, err := blockchain.db.Exec(createBlocksSQL)
+	if err != nil {
+		return fmt.Errorf("failed to create blocks table: %w", err)
+	}
+
+	// Create indexes for performance
+	indexes := []string{
+		"CREATE INDEX IF NOT EXISTS idx_blocks_index ON blocks(block_index);",
+		"CREATE INDEX IF NOT EXISTS idx_blocks_parent ON blocks(parent_hash);",
+		"CREATE INDEX IF NOT EXISTS idx_blocks_main_chain ON blocks(is_main_chain);",
+		"CREATE INDEX IF NOT EXISTS idx_blocks_timestamp ON blocks(timestamp);",
+		"CREATE INDEX IF NOT EXISTS idx_blocks_validator ON blocks(validator_address);",
+	}
+
+	for _, indexSQL := range indexes {
+		_, err = blockchain.db.Exec(indexSQL)
+		if err != nil {
+			return fmt.Errorf("failed to create index: %w", err)
+		}
+	}
+
+	// Create metadata table
+	createMetadataSQL := `
+	CREATE TABLE IF NOT EXISTS blockchain_metadata (
+		key TEXT PRIMARY KEY,
+		value TEXT,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);`
+
+	_, err = blockchain.db.Exec(createMetadataSQL)
+	if err != nil {
+		return fmt.Errorf("failed to create metadata table: %w", err)
+	}
+
+	log.Debug("Database tables initialization completed")
+	return nil
+}
+
+// saveBlockToDatabase saves a single block to the database
+func (blockchain *Blockchain) saveBlockToDatabase(block *Block) error {
+	log.WithField("blockHash", block.Hash).Debug("Saving single block to database")
+
+	var parentHash string
+	if block.Parent != nil {
+		parentHash = block.Parent.Hash
+	}
+
+	isMainChain := blockchain.isBlockOnMainChain(block)
+
+	insertSQL := `INSERT OR REPLACE INTO blocks (
+		hash, block_index, timestamp, prev_hash, 
+		validator_address, data, signature, validator_public_key, 
+		parent_hash, is_main_chain
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	_, err := blockchain.db.Exec(insertSQL,
+		block.Hash,
+		block.Index,
+		block.Timestamp,
+		block.PrevHash,
+		block.ValidatorAddress,
+		block.Data,
+		block.Signature,
+		block.ValidatorPublicKey,
+		parentHash,
+		isMainChain,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save block %s: %w", block.Hash, err)
+	}
+
+	log.WithField("blockHash", block.Hash).Debug("Successfully saved block to database")
+	return nil
+}
+
+// updateMainChainFlags updates the is_main_chain flag for all blocks after chain reorganization
+func (blockchain *Blockchain) updateMainChainFlags() error {
+	log.Debug("Updating main chain flags in database")
+
+	// Begin transaction for atomic updates
+	tx, err := blockchain.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		}
+	}()
+
+	// First, mark all blocks as not on main chain
+	_, err = tx.Exec("UPDATE blocks SET is_main_chain = FALSE")
+	if err != nil {
+		return fmt.Errorf("failed to reset main chain flags: %w", err)
+	}
+
+	// Then mark blocks on current main chain as true
+	if blockchain.MainHead != nil {
+		current := blockchain.MainHead
+		for current != nil {
+			_, err = tx.Exec("UPDATE blocks SET is_main_chain = TRUE WHERE hash = ?", current.Hash)
+			if err != nil {
+				return fmt.Errorf("failed to update main chain flag for block %s: %w", current.Hash, err)
+			}
+			current = current.Parent
+		}
+	}
+
+	// Update metadata
+	_, err = tx.Exec(`INSERT OR REPLACE INTO blockchain_metadata (key, value) VALUES 
+		('main_head_hash', ?), 
+		('block_count', ?)`,
+		func() string {
+			if blockchain.MainHead != nil {
+				return blockchain.MainHead.Hash
+			}
+			return ""
+		}(),
+		len(blockchain.BlockByHash),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update metadata: %w", err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("failed to commit main chain update: %w", err)
+	}
+
+	log.Debug("Successfully updated main chain flags")
+	return nil
+}
+
+// saveBlocksToDatabase saves only new blocks or updates existing ones - more efficient than clearing all
+func (blockchain *Blockchain) saveBlocksToDatabase() error {
+	log.Debug("Incrementally saving blocks to database")
+
+	// Get existing block hashes from database
+	existingHashes := make(map[string]bool)
+	rows, err := blockchain.db.Query("SELECT hash FROM blocks")
+	if err != nil {
+		return fmt.Errorf("failed to query existing blocks: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return fmt.Errorf("failed to scan existing hash: %w", err)
+		}
+		existingHashes[hash] = true
+	}
+
+	// Save only new blocks
+	newBlocksCount := 0
+	for _, block := range blockchain.BlockByHash {
+		if !existingHashes[block.Hash] {
+			if err := blockchain.saveBlockToDatabase(block); err != nil {
+				return fmt.Errorf("failed to save new block %s: %w", block.Hash, err)
+			}
+			newBlocksCount++
+		}
+	}
+
+	// Update main chain flags if there are changes
+	if newBlocksCount > 0 || blockchain.needsMainChainUpdate() {
+		if err := blockchain.updateMainChainFlags(); err != nil {
+			return fmt.Errorf("failed to update main chain flags: %w", err)
+		}
+	}
+
+	log.WithField("newBlocks", newBlocksCount).Info("Successfully saved new blocks to database")
+	return nil
+}
+
+// needsMainChainUpdate checks if main chain flags need updating
+func (blockchain *Blockchain) needsMainChainUpdate() bool {
+	if blockchain.MainHead == nil {
+		return false
+	}
+
+	// Check if current main head is marked as main chain in database
+	var isMainChain bool
+	err := blockchain.db.QueryRow("SELECT is_main_chain FROM blocks WHERE hash = ?", blockchain.MainHead.Hash).Scan(&isMainChain)
+	if err != nil {
+		log.WithError(err).Debug("Failed to check main chain status, assuming update needed")
+		return true
+	}
+
+	return !isMainChain
+}
+
+// loadBlocksFromDatabase loads all blocks from SQLite database into memory and rebuilds tree structure
+func (blockchain *Blockchain) loadBlocksFromDatabase() error {
+	log.Debug("Loading blocks from SQLite database")
+
+	// Query all blocks ordered by index to maintain consistency
+	rows, err := blockchain.db.Query(`SELECT 
+		hash, block_index, timestamp, prev_hash, 
+		validator_address, data, signature, validator_public_key, 
+		parent_hash, is_main_chain 
+		FROM blocks ORDER BY block_index`)
+	if err != nil {
+		return fmt.Errorf("failed to query blocks: %w", err)
+	}
+	defer rows.Close()
+
+	// Initialize blockchain structure
+	blockchain.BlockByHash = make(map[string]*Block)
+	blockchain.Heads = make([]*Block, 0)
+	blockchain.Blocks = make([]*Block, 0)
+	blockchain.Genesis = nil
+	blockchain.MainHead = nil
+	blockchain.LatestHash = ""
+
+	// Load all blocks first
+	var allBlocks []*Block
+	for rows.Next() {
+		block := &Block{
+			Children: make([]*Block, 0),
+		}
+		var parentHash sql.NullString
+		var isMainChain bool
+
+		err = rows.Scan(
+			&block.Hash,
+			&block.Index,
+			&block.Timestamp,
+			&block.PrevHash,
+			&block.ValidatorAddress,
+			&block.Data,
+			&block.Signature,
+			&block.ValidatorPublicKey,
+			&parentHash,
+			&isMainChain,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to scan block: %w", err)
+		}
+
+		// Store hash if it's not already set (for blocks loaded from database)
+		if block.Hash == "" {
+			block.StoreHash()
+		}
+
+		// Validate block integrity before adding to blockchain
+		if err := blockchain.validateBlock(block); err != nil {
+			log.WithFields(logger.Fields{
+				"blockHash":  block.Hash,
+				"blockIndex": block.Index,
+				"error":      err.Error(),
+			}).Warn("Skipping invalid block during loading")
+			continue
+		}
+
+		// Validate genesis block specifically
+		if block.Index == 0 {
+			if block.PrevHash != PrevHashOfGenesis {
+				log.WithFields(logger.Fields{
+					"blockHash":        block.Hash,
+					"blockPrevHash":    block.PrevHash,
+					"expectedPrevHash": PrevHashOfGenesis,
+				}).Warn("Skipping invalid genesis block during loading")
+				continue
+			}
+			blockchain.Genesis = block
+		}
+
+		// Add to hash map and all blocks list
+		blockchain.BlockByHash[block.Hash] = block
+		allBlocks = append(allBlocks, block)
+	}
+
+	if err = rows.Err(); err != nil {
+		return fmt.Errorf("error iterating blocks: %w", err)
+	}
+
+	// No blocks found - empty database is okay
+	if len(allBlocks) == 0 {
+		log.Info("No blocks found in database, starting with empty blockchain")
+		return nil
+	}
+
+	// Rebuild tree structure by setting parent-child relationships
+	// Also identify orphan blocks (blocks with missing parents) to exclude them
+	validBlocks := make([]*Block, 0)
+	for _, block := range allBlocks {
+		if block.Index > 0 {
+			// Find parent by PrevHash
+			if parent, exists := blockchain.BlockByHash[block.PrevHash]; exists {
+				block.Parent = parent
+				parent.AddChild(block)
+				validBlocks = append(validBlocks, block)
+			} else {
+				log.WithFields(logger.Fields{
+					"blockHash": block.Hash,
+					"prevHash":  block.PrevHash,
+				}).Warn("Parent block not found for block, excluding from blockchain")
+				// Remove orphan block from BlockByHash
+				delete(blockchain.BlockByHash, block.Hash)
+			}
+		} else {
+			// Genesis block is always valid
+			validBlocks = append(validBlocks, block)
+		}
+	}
+	
+	// Update allBlocks to only include valid blocks
+	allBlocks = validBlocks
+
+	// Find all heads (blocks with no children)
+	for _, block := range allBlocks {
+		if len(block.Children) == 0 {
+			blockchain.Heads = append(blockchain.Heads, block)
+		}
+	}
+
+	// Determine main head (longest chain)
+	blockchain.MainHead = blockchain.findLongestChainHead()
+
+	// Rebuild legacy Blocks slice (main chain only for backward compatibility)
+	blockchain.Blocks = blockchain.getMainChainBlocks()
+
+	// Set latest hash
+	if blockchain.MainHead != nil {
+		blockchain.LatestHash = blockchain.MainHead.Hash
+	}
+
+	log.WithFields(logger.Fields{
+		"totalBlocks":   len(allBlocks),
+		"mainChainSize": len(blockchain.Blocks),
+		"headsCount":    len(blockchain.Heads),
+		"genesisHash": func() string {
+			if blockchain.Genesis != nil {
+				return blockchain.Genesis.Hash
+			}
+			return "none"
+		}(),
+		"mainHeadHash": func() string {
+			if blockchain.MainHead != nil {
+				return blockchain.MainHead.Hash
+			}
+			return "none"
+		}(),
+	}).Info("Successfully loaded blockchain from SQLite database with tree structure")
+
+	return nil
+}
+
+// isBlockOnMainChain determines if a block is on the main chain
+func (blockchain *Blockchain) isBlockOnMainChain(block *Block) bool {
+	if blockchain.MainHead == nil {
+		return false
+	}
+
+	// Traverse from main head back to genesis
+	current := blockchain.MainHead
+	for current != nil {
+		if current.Hash == block.Hash {
+			return true
+		}
+		current = current.Parent
+	}
+	return false
+}
+
+// getMainChainBlocks returns blocks on the main chain in order
+func (blockchain *Blockchain) getMainChainBlocks() []*Block {
+	if blockchain.MainHead == nil {
+		return []*Block{}
+	}
+
+	// Build chain from main head back to genesis
+	var blocks []*Block
+	current := blockchain.MainHead
+	for current != nil {
+		blocks = append([]*Block{current}, blocks...) // Prepend to maintain order
+		current = current.Parent
+	}
+
+	return blocks
 }
 
 // AddBlock adds a new block to the tree-based blockchain
@@ -107,7 +556,7 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 		blockchain.MainHead = block
 		blockchain.BlockByHash[block.Hash] = block
 		blockchain.Heads = []*Block{block}
-		
+
 		// Legacy support
 		blockchain.Blocks = append(blockchain.Blocks, block)
 		blockchain.LatestHash = block.Hash
@@ -169,10 +618,10 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 	blockchain.LatestHash = blockchain.MainHead.Hash
 
 	log.WithFields(logger.Fields{
-		"blockIndex":  block.Index,
-		"blockHash":   block.Hash,
-		"parentHash":  parentBlock.Hash,
-		"headsCount":  len(blockchain.Heads),
+		"blockIndex": block.Index,
+		"blockHash":  block.Hash,
+		"parentHash": parentBlock.Hash,
+		"headsCount": len(blockchain.Heads),
 	}).Info("Block added to tree-based blockchain")
 	return nil
 }
@@ -315,21 +764,21 @@ func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error 
 			"newHeight":   block.Index,
 			"oldHeight":   blockchain.MainHead.Index,
 		}).Info("New block creates longer chain, switching main head")
-		
+
 		// Switch to the new longer chain
 		blockchain.MainHead = block
-		
+
 		// Update legacy blocks array to represent the new main chain
 		newMainChain := block.GetPath()
 		blockchain.Blocks = newMainChain
 		blockchain.LatestHash = block.Hash
 	} else {
 		log.WithFields(logger.Fields{
-			"blockIndex":   block.Index,
+			"blockIndex":    block.Index,
 			"currentHeight": blockchain.MainHead.Index,
 			"blockHeight":   block.Index,
 		}).Debug("Block creates fork but not longer chain, added to tree")
-		
+
 		// Still add to legacy blocks for backward compatibility if it's extending the main chain
 		if parentBlock == blockchain.MainHead {
 			blockchain.Blocks = append(blockchain.Blocks, block)
@@ -338,13 +787,13 @@ func (blockchain *Blockchain) TryAddBlockWithForkResolution(block *Block) error 
 	}
 
 	log.WithFields(logger.Fields{
-		"blockIndex":  block.Index,
-		"blockHash":   block.Hash,
-		"parentHash":  parentBlock.Hash,
-		"headsCount":  len(blockchain.Heads),
-		"forkCount":   len(blockchain.Heads),
+		"blockIndex": block.Index,
+		"blockHash":  block.Hash,
+		"parentHash": parentBlock.Hash,
+		"headsCount": len(blockchain.Heads),
+		"forkCount":  len(blockchain.Heads),
 	}).Info("Block added to tree-based blockchain with fork resolution")
-	
+
 	return nil
 }
 
@@ -552,224 +1001,45 @@ func (blockchain *Blockchain) VerifyChain() bool {
 	return true
 }
 
-// SaveToDisk persists the blockchain to disk
+// SaveToDisk persists the blockchain to SQLite database
 func (blockchain *Blockchain) SaveToDisk() error {
 	log.WithFields(logger.Fields{
 		"dataPath":   blockchain.dataPath,
 		"blockCount": len(blockchain.Blocks),
-	}).Debug("Saving blockchain to disk")
+	}).Debug("Saving blockchain to SQLite database")
 
 	blockchain.mutex.RLock()
 	defer blockchain.mutex.RUnlock()
 
-	// Create data directory if it doesn't exist
-	err := os.MkdirAll(blockchain.dataPath, 0755)
+	// Save all blocks to database (including tree structure and forks)
+	err := blockchain.saveBlocksToDatabase()
 	if err != nil {
-		log.WithFields(logger.Fields{
-			"dataPath": blockchain.dataPath,
-			"error":    err.Error(),
-		}).Error("Failed to create data directory")
-		return errors.New("failed to create data directory: " + err.Error())
-	}
-
-	// Create serializable blocks without tree structure references
-	serializableBlocks := make([]*Block, len(blockchain.Blocks))
-	for i, block := range blockchain.Blocks {
-		// Create a copy without Parent and Children fields
-		serializableBlocks[i] = &Block{
-			Index:              block.Index,
-			Timestamp:          block.Timestamp,
-			PrevHash:           block.PrevHash,
-			ValidatorAddress:   block.ValidatorAddress,
-			Data:               block.Data,
-			Signature:          block.Signature,
-			ValidatorPublicKey: block.ValidatorPublicKey,
-			Hash:               block.Hash,
-			// Explicitly omit Parent and Children to avoid circular references
-		}
-	}
-
-	// Marshal blockchain data to JSON
-	data, err := json.MarshalIndent(serializableBlocks, "", "  ")
-	if err != nil {
-		log.WithError(err).Error("Failed to marshal blockchain data to JSON")
-		return errors.New("failed to marshal blockchain data: " + err.Error())
-	}
-
-	// Write to file
-	filePath := filepath.Join(blockchain.dataPath, ChainFile)
-	log.WithFields(logger.Fields{
-		"filePath": filePath,
-		"dataSize": len(data),
-	}).Debug("Writing blockchain data to file")
-
-	err = os.WriteFile(filePath, data, 0644)
-	if err != nil {
-		log.WithFields(logger.Fields{
-			"filePath": filePath,
-			"error":    err.Error(),
-		}).Error("Failed to write blockchain to disk")
-		return errors.New("failed to write blockchain to disk: " + err.Error())
+		return fmt.Errorf("failed to save blocks to database: %w", err)
 	}
 
 	log.WithFields(logger.Fields{
-		"filePath":   filePath,
 		"blockCount": len(blockchain.Blocks),
-	}).Info("Blockchain successfully saved to disk")
+	}).Info("Blockchain successfully saved to SQLite database")
 	return nil
 }
 
-// LoadFromDisk loads the blockchain from disk
+// LoadFromDisk loads the blockchain from SQLite database
 func (blockchain *Blockchain) LoadFromDisk() error {
-	log.WithField("dataPath", blockchain.dataPath).Debug("Loading blockchain from disk")
+	log.WithField("dataPath", blockchain.dataPath).Debug("Loading blockchain from SQLite database")
 
 	blockchain.mutex.Lock()
 	defer blockchain.mutex.Unlock()
 
-	filePath := filepath.Join(blockchain.dataPath, ChainFile)
-	log.WithField("filePath", filePath).Debug("Checking for blockchain file")
-
-	// Check if file exists
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		// No blockchain file exists yet - not an error
-		log.Info("No blockchain file found, starting with empty chain")
-		return nil
-	}
-
-	// Read file
-	log.WithField("filePath", filePath).Debug("Reading blockchain file")
-	data, err := os.ReadFile(filePath)
+	// Load all blocks from database (including tree structure and forks)
+	err := blockchain.loadBlocksFromDatabase()
 	if err != nil {
-		log.WithFields(logger.Fields{
-			"filePath": filePath,
-			"error":    err.Error(),
-		}).Error("Failed to read blockchain file")
-		return errors.New("failed to read blockchain file: " + err.Error())
+		return fmt.Errorf("failed to load blocks from database: %w", err)
 	}
 
-	// Unmarshal into blocks
-	log.WithField("dataSize", len(data)).Debug("Unmarshaling blockchain data")
-	var blocks []*Block
-	err = json.Unmarshal(data, &blocks)
-	if err != nil {
-		log.WithError(err).Error("Failed to unmarshal blockchain data")
-		return errors.New("failed to unmarshal blockchain data: " + err.Error())
-	}
-
-	// Validate the loaded chain
-	if len(blocks) > 0 {
-		log.WithField("blockCount", len(blocks)).Debug("Validating loaded blockchain")
-
-		// Verify the genesis block
-		if blocks[0].Index != 0 || blocks[0].PrevHash != PrevHashOfGenesis {
-			log.WithFields(logger.Fields{
-				"genesisIndex":     blocks[0].Index,
-				"genesisPrevHash":  blocks[0].PrevHash,
-				"expectedPrevHash": PrevHashOfGenesis,
-			}).Error("Invalid genesis block in stored chain")
-			return errors.New("invalid genesis block in stored chain")
-		}
-
-		// Verify the rest of the chain
-		for i := 1; i < len(blocks); i++ {
-			currentBlock := blocks[i]
-			previousBlock := blocks[i-1]
-
-			log.WithFields(logger.Fields{
-				"blockIndex": currentBlock.Index,
-				"prevIndex":  previousBlock.Index,
-			}).Debug("Verifying block from stored chain")
-
-			// Check block index
-			if currentBlock.Index != previousBlock.Index+1 {
-				log.WithFields(logger.Fields{
-					"blockIndex":    currentBlock.Index,
-					"prevIndex":     previousBlock.Index,
-					"expectedIndex": previousBlock.Index + 1,
-				}).Error("Invalid block index in stored chain")
-				return errors.New("invalid block index in stored chain")
-			}
-
-			// Check previous hash
-			if currentBlock.PrevHash != previousBlock.Hash {
-				log.WithFields(logger.Fields{
-					"blockPrevHash": currentBlock.PrevHash,
-					"prevBlockHash": previousBlock.Hash,
-				}).Error("Invalid previous hash in stored chain")
-				return errors.New("invalid previous hash in stored chain")
-			}
-
-			// Verify block hash
-			calculatedHash := currentBlock.CalculateHash()
-			calculatedHashHex := hex.EncodeToString(calculatedHash)
-
-			if calculatedHashHex != currentBlock.Hash {
-				log.WithFields(logger.Fields{
-					"blockHash":      currentBlock.Hash,
-					"calculatedHash": calculatedHashHex,
-				}).Error("Invalid block hash in stored chain")
-				return errors.New("invalid block hash in stored chain")
-			}
-		}
-
-		// Initialize tree structure fields for loaded blocks
-		for _, block := range blocks {
-			if block.Children == nil {
-				block.Children = make([]*Block, 0)
-			}
-			block.Parent = nil // Will be set below
-		}
-
-		// Rebuild tree structure and hash map
-		blockchain.BlockByHash = make(map[string]*Block)
-		blockchain.Heads = make([]*Block, 0)
-		
-		// Set genesis
-		if len(blocks) > 0 {
-			blockchain.Genesis = blocks[0]
-			blockchain.BlockByHash[blocks[0].Hash] = blocks[0]
-		}
-
-		// Rebuild parent-child relationships
-		for i := 1; i < len(blocks); i++ {
-			currentBlock := blocks[i]
-			blockchain.BlockByHash[currentBlock.Hash] = currentBlock
-			
-			// Find parent block by previous hash
-			for j := i - 1; j >= 0; j-- {
-				if blocks[j].Hash == currentBlock.PrevHash {
-					// Set parent-child relationship
-					currentBlock.Parent = blocks[j]
-					blocks[j].AddChild(currentBlock)
-					break
-				}
-			}
-		}
-
-		// Find heads (blocks with no children)
-		for _, block := range blocks {
-			if len(block.Children) == 0 {
-				blockchain.Heads = append(blockchain.Heads, block)
-			}
-		}
-
-		// Set main head to the last block in the loaded chain (longest path)
-		if len(blocks) > 0 {
-			blockchain.MainHead = blocks[len(blocks)-1]
-		}
-
-		// Set legacy fields
-		blockchain.Blocks = blocks
-		blockchain.LatestHash = blocks[len(blocks)-1].Hash
-
-		log.WithFields(logger.Fields{
-			"blockCount": len(blocks),
-			"latestHash": blockchain.LatestHash,
-			"headsCount": len(blockchain.Heads),
-		}).Info("Blockchain successfully loaded from disk with tree structure rebuilt")
-	} else {
-		log.Warn("Loaded blockchain file contains no blocks")
-	}
+	log.WithFields(logger.Fields{
+		"blockCount": len(blockchain.Blocks),
+		"headsCount": len(blockchain.Heads),
+	}).Info("Blockchain successfully loaded from SQLite database")
 
 	return nil
 }
@@ -803,171 +1073,18 @@ func (blockchain *Blockchain) AddBlockWithAutoSave(block *Block) error {
 	return nil
 }
 
-// LoadBlockchainFromFile creates a new blockchain instance and loads it directly from the specified file
-func LoadBlockchainFromFile(filePath string) (*Blockchain, error) {
-	log.WithField("filePath", filePath).Info("Loading blockchain directly from file")
-
-	// Get the directory path from the file path
-	dirPath := filepath.Dir(filePath)
+// LoadBlockchainFromDirectory creates a new blockchain instance and loads it from SQLite database in the specified directory
+func LoadBlockchainFromDirectory(dirPath string) (*Blockchain, error) {
+	log.WithField("dirPath", dirPath).Info("Loading blockchain from directory")
 
 	// Create a new blockchain instance with the directory path
 	blockchain := NewBlockchain(dirPath)
 
-	// Check if the filename is the default one
-	if filepath.Base(filePath) != ChainFile {
-		// Using a custom filename
-		customFileName := filepath.Base(filePath)
-		log.WithFields(logger.Fields{
-			"customFile":  customFileName,
-			"defaultFile": ChainFile,
-		}).Debug("Using custom blockchain filename")
-
-		// Check if file exists
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			log.WithField("filePath", filePath).Error("Blockchain file not found")
-			return nil, errors.New("blockchain file not found: " + filePath)
-		}
-
-		// Read file
-		log.WithField("filePath", filePath).Debug("Reading blockchain file")
-		data, err := os.ReadFile(filePath)
-		if err != nil {
-			log.WithFields(logger.Fields{
-				"filePath": filePath,
-				"error":    err.Error(),
-			}).Error("Failed to read blockchain file")
-			return nil, errors.New("failed to read blockchain file: " + err.Error())
-		}
-
-		// Unmarshal into blocks
-		log.WithField("dataSize", len(data)).Debug("Unmarshaling blockchain data")
-		var blocks []*Block
-		err = json.Unmarshal(data, &blocks)
-		if err != nil {
-			log.WithError(err).Error("Failed to unmarshal blockchain data")
-			return nil, errors.New("failed to unmarshal blockchain data: " + err.Error())
-		}
-
-		// Validate the loaded chain
-		if len(blocks) > 0 {
-			log.WithField("blockCount", len(blocks)).Debug("Validating loaded blockchain")
-
-			// Verify the genesis block
-			if blocks[0].Index != 0 || blocks[0].PrevHash != PrevHashOfGenesis {
-				log.WithFields(logger.Fields{
-					"genesisIndex":     blocks[0].Index,
-					"genesisPrevHash":  blocks[0].PrevHash,
-					"expectedPrevHash": PrevHashOfGenesis,
-				}).Error("Invalid genesis block in stored chain")
-				return nil, errors.New("invalid genesis block in stored chain")
-			}
-
-			// Verify the rest of the chain
-			for i := 1; i < len(blocks); i++ {
-				currentBlock := blocks[i]
-				previousBlock := blocks[i-1]
-
-				// Check block index
-				if currentBlock.Index != previousBlock.Index+1 {
-					log.WithFields(logger.Fields{
-						"blockIndex":    currentBlock.Index,
-						"prevIndex":     previousBlock.Index,
-						"expectedIndex": previousBlock.Index + 1,
-					}).Error("Invalid block index in stored chain")
-					return nil, errors.New("invalid block index in stored chain")
-				}
-
-				// Check previous hash
-				if currentBlock.PrevHash != previousBlock.Hash {
-					log.WithFields(logger.Fields{
-						"blockPrevHash": currentBlock.PrevHash,
-						"prevBlockHash": previousBlock.Hash,
-					}).Error("Invalid previous hash in stored chain")
-					return nil, errors.New("invalid previous hash in stored chain")
-				}
-
-				// Verify block hash
-				calculatedHash := currentBlock.CalculateHash()
-				calculatedHashHex := hex.EncodeToString(calculatedHash)
-
-				if calculatedHashHex != currentBlock.Hash {
-					log.WithFields(logger.Fields{
-						"blockHash":      currentBlock.Hash,
-						"calculatedHash": calculatedHashHex,
-					}).Error("Invalid block hash in stored chain")
-					return nil, errors.New("invalid block hash in stored chain")
-				}
-			}
-
-			// Initialize tree structure fields for loaded blocks
-			for _, block := range blocks {
-				if block.Children == nil {
-					block.Children = make([]*Block, 0)
-				}
-				block.Parent = nil // Will be set below
-			}
-
-			// Set blockchain data with tree structure rebuild
-			blockchain.mutex.Lock()
-			
-			// Rebuild tree structure and hash map
-			blockchain.BlockByHash = make(map[string]*Block)
-			blockchain.Heads = make([]*Block, 0)
-			
-			// Set genesis
-			if len(blocks) > 0 {
-				blockchain.Genesis = blocks[0]
-				blockchain.BlockByHash[blocks[0].Hash] = blocks[0]
-			}
-
-			// Rebuild parent-child relationships
-			for i := 1; i < len(blocks); i++ {
-				currentBlock := blocks[i]
-				blockchain.BlockByHash[currentBlock.Hash] = currentBlock
-				
-				// Find parent block by previous hash
-				for j := i - 1; j >= 0; j-- {
-					if blocks[j].Hash == currentBlock.PrevHash {
-						// Set parent-child relationship
-						currentBlock.Parent = blocks[j]
-						blocks[j].AddChild(currentBlock)
-						break
-					}
-				}
-			}
-
-			// Find heads (blocks with no children)
-			for _, block := range blocks {
-				if len(block.Children) == 0 {
-					blockchain.Heads = append(blockchain.Heads, block)
-				}
-			}
-
-			// Set main head to the last block in the loaded chain (longest path)
-			if len(blocks) > 0 {
-				blockchain.MainHead = blocks[len(blocks)-1]
-			}
-
-			// Set legacy fields
-			blockchain.Blocks = blocks
-			blockchain.LatestHash = blocks[len(blocks)-1].Hash
-			blockchain.mutex.Unlock()
-
-			log.WithFields(logger.Fields{
-				"blockCount": len(blocks),
-				"latestHash": blockchain.LatestHash,
-				"headsCount": len(blockchain.Heads),
-			}).Info("Blockchain successfully loaded from custom file with tree structure rebuilt")
-		} else {
-			log.Warn("Loaded blockchain file contains no blocks")
-		}
-	} else {
-		// Load using the standard method
-		err := blockchain.LoadFromDisk()
-		if err != nil {
-			log.WithError(err).Error("Failed to load blockchain from disk")
-			return nil, err
-		}
+	// Load using the standard SQLite method
+	err := blockchain.LoadFromDisk()
+	if err != nil {
+		log.WithError(err).Error("Failed to load blockchain from SQLite database")
+		return nil, err
 	}
 
 	return blockchain, nil
@@ -995,11 +1112,27 @@ func (blockchain *Blockchain) updateHeads(newBlock *Block) {
 
 	// Add new block as a head
 	blockchain.Heads = append(blockchain.Heads, newBlock)
-	
+
 	log.WithFields(logger.Fields{
 		"newHeadHash": newBlock.Hash,
 		"headsCount":  len(blockchain.Heads),
 	}).Debug("Added new block as head")
+}
+
+// findLongestChainHead finds the head of the longest chain among all heads
+func (blockchain *Blockchain) findLongestChainHead() *Block {
+	if len(blockchain.Heads) == 0 {
+		return nil
+	}
+
+	longestHead := blockchain.Heads[0]
+	for _, head := range blockchain.Heads {
+		if head.Index > longestHead.Index {
+			longestHead = head
+		}
+	}
+
+	return longestHead
 }
 
 // isLongerChain checks if the given block creates a longer chain than current main head
@@ -1007,7 +1140,7 @@ func (blockchain *Blockchain) isLongerChain(block *Block) bool {
 	if blockchain.MainHead == nil {
 		return true
 	}
-	
+
 	return block.Index > blockchain.MainHead.Index
 }
 
