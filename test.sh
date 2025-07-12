@@ -1,10 +1,49 @@
 #!/bin/bash
 
+# Check for clean argument
+if [ "$1" == "clean" ]; then
+    echo "Cleaning up node directories..."
+
+    # Clean node-1
+    if [ -d "test/node-1/logs" ]; then
+        rm -rf test/node-1/logs
+        echo "Removed test/node-1/logs"
+    fi
+    if [ -d "test/node-1/data" ]; then
+        rm -rf test/node-1/data
+        echo "Removed test/node-1/data"
+    fi
+
+    # Clean node-2
+    if [ -d "test/node-2/logs" ]; then
+        rm -rf test/node-2/logs
+        echo "Removed test/node-2/logs"
+    fi
+    if [ -d "test/node-2/data" ]; then
+        rm -rf test/node-2/data
+        echo "Removed test/node-2/data"
+    fi
+
+    # Clean node-3
+    if [ -d "test/node-3/logs" ]; then
+        rm -rf test/node-3/logs
+        echo "Removed test/node-3/logs"
+    fi
+    if [ -d "test/node-3/data" ]; then
+        rm -rf test/node-3/data
+        echo "Removed test/node-3/data"
+    fi
+
+    echo "Cleanup completed."
+    exit 0
+fi
+
 # Build the main binary
 if ! go build main.go; then
     echo "Error: Failed to build main.go"
     exit 1
 fi
+
 # Copy binary to test directories
 cp main test/node-1/
 cp main test/node-2/

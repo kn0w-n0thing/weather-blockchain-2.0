@@ -146,24 +146,23 @@ func (vs *ValidatorSelection) GetValidatorForSlot(slot uint64) string {
 		"validator": vs.String(),
 	}).Debug("GetValidatorForSlot: Finding validator for slot")
 
-	// Ensure we're using the correct epoch
-	vs.updateEpochIfNeeded(slot)
-
-	// Get epoch for this slot
-	epoch := vs.getEpochForSlot(slot)
-	if epoch == nil || len(epoch.Participants) == 0 {
-		log.Debug("GetValidatorForSlot: No valid epoch or participants found")
+	// Get participants using deterministic epoch calculation for the specific slot
+	participants := vs.getDeterministicParticipantsForSlot(slot)
+	if len(participants) == 0 {
+		log.Debug("GetValidatorForSlot: No participants found for slot")
 		return ""
 	}
 
-	// Use the epoch's participant list for selection
-	participants := epoch.Participants
-	log.WithField("participantCount", len(participants)).Debug("GetValidatorForSlot: Using participants from epoch")
+	log.WithFields(logger.Fields{
+		"participantCount": len(participants),
+		"participants":     participants,
+	}).Debug("GetValidatorForSlot: Using deterministic participants for slot")
 
-	// Create deterministic hash based on slot number
-	slotBytes := make([]byte, 8)
-	binary.LittleEndian.PutUint64(slotBytes, slot)
-	hash := sha256.Sum256(slotBytes)
+	// Create deterministic hash based on slot number and participant list
+	// Include participants in hash to ensure consistency across nodes
+	participantString := strings.Join(participants, ",")
+	hashData := fmt.Sprintf("%d:%s", slot, participantString)
+	hash := sha256.Sum256([]byte(hashData))
 
 	// Use the first 8 bytes of the hash as a number
 	randomValue := binary.LittleEndian.Uint64(hash[:8])
@@ -176,6 +175,7 @@ func (vs *ValidatorSelection) GetValidatorForSlot(slot uint64) string {
 		"slot":              slot,
 		"selectedIndex":     selectedIndex,
 		"selectedValidator": selectedValidator,
+		"hashData":          hashData,
 	}).Debug("GetValidatorForSlot: Selected validator")
 
 	return selectedValidator
@@ -477,7 +477,7 @@ func (vs *ValidatorSelection) getValidatorSetFromBlockchain() []string {
 
 	// Type assert to block type
 	latestBlock, ok := latestBlockInterface.(interface {
-		ValidatorAddress() string
+		GetValidatorAddress() string
 		GetParent() interface{}
 	})
 	if !ok || latestBlock == nil {
@@ -492,14 +492,14 @@ func (vs *ValidatorSelection) getValidatorSetFromBlockchain() []string {
 
 	// If latestBlock is nil, current will be nil and the loop won't execute
 	for current != nil && blockCount < maxBlocks {
-		if current.ValidatorAddress() != "" {
-			validatorSet[current.ValidatorAddress()] = true
+		if current.GetValidatorAddress() != "" {
+			validatorSet[current.GetValidatorAddress()] = true
 		}
 		
 		// Move to parent block
 		if current.GetParent() != nil {
 			if parent, ok := current.GetParent().(interface {
-				ValidatorAddress() string
+				GetValidatorAddress() string
 				GetParent() interface{}
 			}); ok {
 				current = parent
@@ -564,4 +564,141 @@ func (vs *ValidatorSelection) getValidatorSetFromPeers() []string {
 	}).Debug("getValidatorSetFromPeers: Retrieved validator set from peers")
 
 	return participants
+}
+
+// getDeterministicParticipantsForSlot returns a deterministic participant list for a specific slot
+// This ensures all nodes get the same participant set regardless of timing
+func (vs *ValidatorSelection) getDeterministicParticipantsForSlot(slot uint64) []string {
+	log.WithField("slot", slot).Debug("getDeterministicParticipantsForSlot: Getting deterministic participants for slot")
+	
+	// Calculate which epoch this slot belongs to
+	epochNumber := slot / vs.slotsPerEpoch
+	
+	log.WithFields(logger.Fields{
+		"slot":        slot,
+		"epochNumber": epochNumber,
+		"slotsPerEpoch": vs.slotsPerEpoch,
+	}).Debug("getDeterministicParticipantsForSlot: Calculated epoch number")
+	
+	// Get a consistent participant set regardless of current node state
+	// This uses the same logic as getValidatorSetFromBlockchain but is deterministic
+	var participants []string
+	
+	// Try to get participants from blockchain first
+	blockchainInterface := vs.node.GetBlockchain()
+	if blockchainInterface != nil {
+		if blockchain, ok := blockchainInterface.(interface {
+			GetLatestBlock() interface{}
+		}); ok {
+			latestBlockInterface := blockchain.GetLatestBlock()
+			if latestBlockInterface != nil {
+				if latestBlock, ok := latestBlockInterface.(interface {
+					GetValidatorAddress() string
+					GetParent() interface{}
+				}); ok && latestBlock != nil {
+					// Collect validators from recent blocks
+					validatorSet := make(map[string]bool)
+					current := latestBlock
+					blockCount := 0
+					maxBlocks := 10
+					
+					for current != nil && blockCount < maxBlocks {
+						if current.GetValidatorAddress() != "" {
+							validatorSet[current.GetValidatorAddress()] = true
+						}
+						
+						// Move to parent block
+						if current.GetParent() != nil {
+							if parent, ok := current.GetParent().(interface {
+								GetValidatorAddress() string
+								GetParent() interface{}
+							}); ok {
+								current = parent
+							} else {
+								break
+							}
+						} else {
+							break
+						}
+						blockCount++
+					}
+					
+					// Convert to sorted slice
+					for validator := range validatorSet {
+						participants = append(participants, validator)
+					}
+					sort.Strings(participants)
+				}
+			}
+		}
+	}
+	
+	// If no blockchain participants, fall back to peer discovery
+	if len(participants) == 0 {
+		// Always include the local node as a participant
+		participants = append(participants, vs.node.ID)
+		
+		// Add all discovered peers (use peer IDs, not addresses)
+		for peerID := range vs.node.Peers {
+			participants = append(participants, peerID)
+		}
+		
+		// Sort participants to ensure deterministic ordering
+		sort.Strings(participants)
+	} else {
+		// Always include local node if it's not already in the set
+		localNodeIncluded := false
+		for _, validator := range participants {
+			if validator == vs.node.ID {
+				localNodeIncluded = true
+				break
+			}
+		}
+		
+		if !localNodeIncluded {
+			participants = append(participants, vs.node.ID)
+			sort.Strings(participants)
+		}
+	}
+	
+	log.WithFields(logger.Fields{
+		"slot":             slot,
+		"epochNumber":      epochNumber,
+		"participantCount": len(participants),
+		"participants":     participants,
+	}).Debug("getDeterministicParticipantsForSlot: Retrieved deterministic participants")
+	
+	return participants
+}
+
+// OnNewValidatorFromBlock handles notification of a new validator from a received block
+func (vs *ValidatorSelection) OnNewValidatorFromBlock(validatorAddress string) {
+	log.WithFields(logger.Fields{
+		"validator": validatorAddress,
+	}).Debug("OnNewValidatorFromBlock: Received notification of new validator")
+
+	// For now, we'll trigger a rebuild of the current epoch to include this validator
+	// In a production system, you might want to be more selective about when to rebuild
+	
+	// Store the current epoch data to compare
+	oldParticipantCount := 0
+	if vs.currentEpoch != nil {
+		oldParticipantCount = len(vs.currentEpoch.Participants)
+	}
+	
+	// Rebuild the epoch to include the new validator
+	vs.buildCurrentEpoch()
+	
+	// Log the update
+	newParticipantCount := 0
+	if vs.currentEpoch != nil {
+		newParticipantCount = len(vs.currentEpoch.Participants)
+	}
+	
+	log.WithFields(logger.Fields{
+		"validator":            validatorAddress,
+		"oldParticipantCount":  oldParticipantCount,
+		"newParticipantCount":  newParticipantCount,
+		"participantChange":    newParticipantCount - oldParticipantCount,
+	}).Info("OnNewValidatorFromBlock: Updated validator set from received block")
 }

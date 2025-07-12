@@ -463,7 +463,7 @@ func ApiFactory(source string) (Api, error) {
 			AppCode: os.Getenv("MOJI_APP_CODE"),
 			Token:   os.Getenv("MOJI_TOKEN"),
 		}, nil
-	case "azure", "ms":
+	case "azure", "az":
 		return &AzureWeatherAPI{
 			SubscriptionKey: os.Getenv("AZURE_SUBSCRIPTION_KEY"),
 		}, nil

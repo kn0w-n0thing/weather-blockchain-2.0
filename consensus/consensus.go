@@ -359,6 +359,10 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 			"blockHash":  block.Hash,
 			"validator":  block.ValidatorAddress,
 		}).Info("Successfully added block from network to blockchain")
+		
+		// Notify validator selection of new validator from received block
+		ce.updateValidatorSetFromBlock(block)
+		
 		return nil
 	}
 
@@ -684,4 +688,23 @@ func (ce *Engine) requestBlockRangeViaNetworkBroadcaster(startIndex, endIndex ui
 		"startIndex": startIndex,
 		"endIndex":   endIndex,
 	}).Info("Block range request sent via network broadcaster")
+}
+
+// updateValidatorSetFromBlock notifies the validator selection of a new validator from a received block
+func (ce *Engine) updateValidatorSetFromBlock(block *block.Block) {
+	log.WithFields(logger.Fields{
+		"blockIndex": block.Index,
+		"validator":  block.ValidatorAddress,
+	}).Debug("Updating validator set from received block")
+
+	// Try to cast the validator selection to the concrete type to call update method
+	if vs, ok := ce.validatorSelection.(interface{ OnNewValidatorFromBlock(string) }); ok {
+		vs.OnNewValidatorFromBlock(block.ValidatorAddress)
+		log.WithFields(logger.Fields{
+			"blockIndex": block.Index,
+			"validator":  block.ValidatorAddress,
+		}).Debug("Notified validator selection of new validator")
+	} else {
+		log.Debug("Validator selection doesn't support dynamic updates")
+	}
 }

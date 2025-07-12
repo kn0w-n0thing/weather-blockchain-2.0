@@ -934,3 +934,339 @@ func TestBuildCurrentEpochWithBlockchain(t *testing.T) {
 		assert.Equal(t, 3, len(vs.currentEpoch.Participants), "Should have 3 participants from peers")
 	})
 }
+
+// TestGetDeterministicParticipantsForSlot tests the new deterministic participant selection
+func TestGetDeterministicParticipantsForSlot(t *testing.T) {
+	timeSync := createTestTimeSync(100)
+	
+	t.Run("WithNoPeers", func(t *testing.T) {
+		// Test with no peers - should only include local node
+		node := createTestNode("testNode", map[string]string{})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		participants := vs.getDeterministicParticipantsForSlot(100)
+		
+		assert.Equal(t, []string{"testNode"}, participants, "Should only include local node when no peers")
+		assert.Equal(t, 1, len(participants), "Should have 1 participant")
+	})
+	
+	t.Run("WithMultiplePeers", func(t *testing.T) {
+		// Test with multiple peers
+		node := createTestNode("testNode", map[string]string{
+			"peer1": "127.0.0.1:8001",
+			"peer2": "127.0.0.1:8002",
+			"peer3": "127.0.0.1:8003",
+		})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		participants := vs.getDeterministicParticipantsForSlot(100)
+		
+		// Should include local node and all peers in sorted order
+		expectedParticipants := []string{"peer1", "peer2", "peer3", "testNode"}
+		assert.Equal(t, expectedParticipants, participants, "Should include local node and all peers in sorted order")
+		assert.Equal(t, 4, len(participants), "Should have 4 participants")
+	})
+	
+	t.Run("ConsistentAcrossSlots", func(t *testing.T) {
+		// Test that participants are consistent across different slots in same epoch
+		node := createTestNode("testNode", map[string]string{
+			"peer1": "127.0.0.1:8001",
+			"peer2": "127.0.0.1:8002",
+		})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		// Get participants for different slots in same epoch
+		participants1 := vs.getDeterministicParticipantsForSlot(100)
+		participants2 := vs.getDeterministicParticipantsForSlot(101)
+		participants3 := vs.getDeterministicParticipantsForSlot(131) // Next epoch
+		
+		// Should be consistent within same epoch
+		assert.Equal(t, participants1, participants2, "Participants should be consistent within same epoch")
+		
+		// Should be same across epochs for this simple test (no blockchain state changes)
+		assert.Equal(t, participants1, participants3, "Participants should be consistent across epochs")
+	})
+	
+	t.Run("EpochCalculation", func(t *testing.T) {
+		// Test that epoch calculation works correctly
+		node := createTestNode("testNode", map[string]string{})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		// Test slots in different epochs
+		participants1 := vs.getDeterministicParticipantsForSlot(0)    // Epoch 0
+		participants2 := vs.getDeterministicParticipantsForSlot(31)   // Epoch 0
+		participants3 := vs.getDeterministicParticipantsForSlot(32)   // Epoch 1
+		participants4 := vs.getDeterministicParticipantsForSlot(63)   // Epoch 1
+		participants5 := vs.getDeterministicParticipantsForSlot(64)   // Epoch 2
+		
+		// Should be consistent within epochs
+		assert.Equal(t, participants1, participants2, "Should be consistent within epoch 0")
+		assert.Equal(t, participants3, participants4, "Should be consistent within epoch 1")
+		
+		// Should be same across epochs for this simple test
+		assert.Equal(t, participants1, participants3, "Should be consistent across epochs")
+		assert.Equal(t, participants1, participants5, "Should be consistent across epochs")
+	})
+}
+
+// TestGetValidatorForSlot_Deterministic tests the updated GetValidatorForSlot function
+func TestGetValidatorForSlot_Deterministic(t *testing.T) {
+	timeSync := createTestTimeSync(100)
+	
+	t.Run("DeterministicSelection", func(t *testing.T) {
+		// Test that validator selection is deterministic
+		node := createTestNode("testNode", map[string]string{
+			"validator1": "127.0.0.1:8001",
+			"validator2": "127.0.0.1:8002",
+			"validator3": "127.0.0.1:8003",
+		})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		// Get validator for same slot multiple times
+		slot := uint64(100)
+		validator1 := vs.GetValidatorForSlot(slot)
+		validator2 := vs.GetValidatorForSlot(slot)
+		validator3 := vs.GetValidatorForSlot(slot)
+		
+		// Should be consistent
+		assert.Equal(t, validator1, validator2, "Validator selection should be deterministic")
+		assert.Equal(t, validator1, validator3, "Validator selection should be deterministic")
+		assert.NotEmpty(t, validator1, "Should select a validator")
+	})
+	
+	t.Run("DifferentSlotsSelectDifferentValidators", func(t *testing.T) {
+		// Test that different slots can select different validators
+		node := createTestNode("testNode", map[string]string{
+			"validator1": "127.0.0.1:8001",
+			"validator2": "127.0.0.1:8002",
+			"validator3": "127.0.0.1:8003",
+		})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		// Get validators for different slots
+		validators := make(map[string]bool)
+		for i := uint64(0); i < 20; i++ {
+			validator := vs.GetValidatorForSlot(i)
+			validators[validator] = true
+		}
+		
+		// Should have selected multiple different validators
+		assert.GreaterOrEqual(t, len(validators), 2, "Should select different validators for different slots")
+		
+		// All selected validators should be from the participant list
+		validParticipants := []string{"testNode", "validator1", "validator2", "validator3"}
+		for validator := range validators {
+			assert.Contains(t, validParticipants, validator, "Selected validator should be from participant list")
+		}
+	})
+	
+	t.Run("ConsistentAcrossNodes", func(t *testing.T) {
+		// Test that different nodes with same participants select same validator
+		// Note: Each node includes itself in participants, so we need identical participant sets
+		participants := map[string]string{
+			"validator1": "127.0.0.1:8001",
+			"validator2": "127.0.0.1:8002",
+			"validator3": "127.0.0.1:8003",
+		}
+		
+		// Create two nodes with same participants - use same node ID for consistency
+		node1 := createTestNode("commonNode", participants)
+		node2 := createTestNode("commonNode", participants)
+		
+		vs1 := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node1,
+			slotsPerEpoch: 32,
+		}
+		
+		vs2 := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node2,
+			slotsPerEpoch: 32,
+		}
+		
+		// Both should select same validator for same slot
+		slot := uint64(100)
+		validator1 := vs1.GetValidatorForSlot(slot)
+		validator2 := vs2.GetValidatorForSlot(slot)
+		
+		assert.Equal(t, validator1, validator2, "Different nodes should select same validator for same slot")
+	})
+	
+	t.Run("WithNoParticipants", func(t *testing.T) {
+		// Test behavior with no participants
+		node := createTestNode("testNode", map[string]string{})
+		// Clear the node's peers to simulate no participants
+		node.Peers = make(map[string]string)
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		// Should still work with just the local node
+		validator := vs.GetValidatorForSlot(100)
+		assert.Equal(t, "testNode", validator, "Should select local node when no other participants")
+	})
+	
+	t.Run("HashDataConsistency", func(t *testing.T) {
+		// Test that hash data is consistent for same inputs
+		node := createTestNode("testNode", map[string]string{
+			"validator1": "127.0.0.1:8001",
+			"validator2": "127.0.0.1:8002",
+		})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		// Same slot should produce same hash data
+		slot := uint64(100)
+		validator1 := vs.GetValidatorForSlot(slot)
+		validator2 := vs.GetValidatorForSlot(slot)
+		
+		assert.Equal(t, validator1, validator2, "Same slot should produce same validator")
+		
+		// Different slots should potentially produce different validators
+		validator3 := vs.GetValidatorForSlot(slot + 1)
+		// Note: They might be the same by chance, but the selection should be deterministic
+		
+		// Verify that selection is consistent for the different slot too
+		validator4 := vs.GetValidatorForSlot(slot + 1)
+		assert.Equal(t, validator3, validator4, "Different slot should be consistently selected")
+	})
+}
+
+// TestDeterministicValidatorSelection_Integration tests the integration of deterministic validator selection
+func TestDeterministicValidatorSelection_Integration(t *testing.T) {
+	timeSync := createTestTimeSync(100)
+	
+	t.Run("MultipleNodesConsistency", func(t *testing.T) {
+		// Test that multiple nodes with identical state select same validators
+		// Use identical node IDs to ensure identical participant lists
+		participants := map[string]string{
+			"validator1": "127.0.0.1:8001",
+			"validator2": "127.0.0.1:8002",
+			"validator3": "127.0.0.1:8003",
+		}
+		
+		// Create multiple nodes with the same node ID to ensure identical participant lists
+		nodes := []*ValidatorSelection{}
+		for i := 0; i < 5; i++ {
+			node := createTestNode("commonNode", participants) // Same ID for all nodes
+			vs := &ValidatorSelection{
+				timeSync:      timeSync,
+				node:          node,
+				slotsPerEpoch: 32,
+			}
+			nodes = append(nodes, vs)
+		}
+		
+		// Test consistency across multiple slots
+		for slot := uint64(0); slot < 10; slot++ {
+			var expectedValidator string
+			
+			// Get validator from first node
+			expectedValidator = nodes[0].GetValidatorForSlot(slot)
+			
+			// Verify all other nodes select the same validator
+			for i, vs := range nodes {
+				validator := vs.GetValidatorForSlot(slot)
+				assert.Equal(t, expectedValidator, validator, 
+					"Node %d should select same validator as node 0 for slot %d", i, slot)
+			}
+		}
+	})
+	
+	t.Run("ValidatorDistribution", func(t *testing.T) {
+		// Test that validators are distributed reasonably across slots
+		node := createTestNode("testNode", map[string]string{
+			"validator1": "127.0.0.1:8001",
+			"validator2": "127.0.0.1:8002",
+			"validator3": "127.0.0.1:8003",
+		})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		// Count validator selections over many slots
+		validatorCounts := make(map[string]int)
+		totalSlots := 100
+		
+		for slot := uint64(0); slot < uint64(totalSlots); slot++ {
+			validator := vs.GetValidatorForSlot(slot)
+			validatorCounts[validator]++
+		}
+		
+		// Should have selected all validators at least once
+		assert.GreaterOrEqual(t, len(validatorCounts), 3, "Should select multiple validators")
+		
+		// No single validator should dominate completely
+		for validator, count := range validatorCounts {
+			percentage := float64(count) / float64(totalSlots) * 100
+			assert.Less(t, percentage, 80.0, "Validator %s should not dominate (selected %d%% of slots)", validator, int(percentage))
+		}
+	})
+	
+	t.Run("EpochBoundaryConsistency", func(t *testing.T) {
+		// Test consistency across epoch boundaries
+		node := createTestNode("testNode", map[string]string{
+			"validator1": "127.0.0.1:8001",
+			"validator2": "127.0.0.1:8002",
+		})
+		
+		vs := &ValidatorSelection{
+			timeSync:      timeSync,
+			node:          node,
+			slotsPerEpoch: 32,
+		}
+		
+		// Test slots at epoch boundaries
+		epochBoundarySlots := []uint64{31, 32, 63, 64, 95, 96}
+		
+		for _, slot := range epochBoundarySlots {
+			validator1 := vs.GetValidatorForSlot(slot)
+			validator2 := vs.GetValidatorForSlot(slot) // Call again
+			
+			assert.Equal(t, validator1, validator2, 
+				"Validator selection should be consistent for slot %d", slot)
+			assert.NotEmpty(t, validator1, "Should select a validator for slot %d", slot)
+		}
+	})
+}

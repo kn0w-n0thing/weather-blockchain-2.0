@@ -258,3 +258,13 @@ func (block *Block) IsAncestorOf(descendant *Block) bool {
 	
 	return false
 }
+
+// GetValidatorAddress returns the validator address for this block
+func (block *Block) GetValidatorAddress() string {
+	return block.ValidatorAddress
+}
+
+// GetParent returns the parent block
+func (block *Block) GetParent() interface{} {
+	return block.Parent
+}
