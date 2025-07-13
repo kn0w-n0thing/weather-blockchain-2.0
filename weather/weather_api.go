@@ -72,6 +72,11 @@ func (api *OpenWeatherAPI) FetchWeather() (Data, error) {
 		"rawData": string(body),
 	}).Debug("Received raw weather data")
 
+	responseCode := rawData["cod"].(float64)
+	if responseCode != 200 {
+		return data, fmt.Errorf(rawData["message"].(string))
+	}
+
 	// Extract weather data
 	weather := rawData["weather"].([]interface{})[0].(map[string]interface{})
 	main := rawData["main"].(map[string]interface{})
@@ -127,6 +132,10 @@ func (api *AccuWeatherAPI) FetchWeather() (Data, error) {
 		return data, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return data, fmt.Errorf(resp.Status)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -213,8 +222,9 @@ func (api *XinzhiWeatherAPI) FetchWeather() (Data, error) {
 		"rawData": string(body),
 	}).Debug("Received raw weather data")
 
-	results := rawData["results"].([]interface{})
-	if len(results) > 0 {
+	if results, ok := rawData["results"].([]interface{}); !ok {
+		return data, fmt.Errorf(rawData["status"].(string))
+	} else {
 		now := results[0].(map[string]interface{})["now"].(map[string]interface{})
 
 		data.Condition = now["text"].(string)
@@ -319,8 +329,11 @@ func (api *MojiWeatherAPI) FetchWeather() (Data, error) {
 		"rawData": string(body),
 	}).Debug("Received raw weather data")
 
-	condition := rawData["data"].(map[string]interface{})["condition"].(map[string]interface{})
+	if _, ok := rawData["results"].([]interface{}); !ok {
+		return data, fmt.Errorf(rawData["rc"].(map[string]interface{})["p"].(string))
+	}
 
+	condition := rawData["data"].(map[string]interface{})["condition"].(map[string]interface{})
 	data.Condition = condition["condition"].(string)
 
 	if temp, err := strconv.ParseFloat(condition["temp"].(string), 64); err == nil {
@@ -398,8 +411,9 @@ func (api *AzureWeatherAPI) FetchWeather() (Data, error) {
 		"rawData": string(body),
 	}).Debug("Received raw weather data")
 
-	results := rawData["results"].([]interface{})
-	if len(results) > 0 {
+	if results, ok := rawData["results"].([]interface{}); !ok {
+		return data, fmt.Errorf(rawData["error"].(map[string]interface{})["message"].(string))
+	} else {
 		result := results[0].(map[string]interface{})
 
 		data.Condition = result["phrase"].(string)

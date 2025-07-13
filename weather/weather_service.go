@@ -4,12 +4,12 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 	"weather-blockchain/logger"
 
 	_ "github.com/mattn/go-sqlite3"
 )
-
 
 // Service manages weather data collection and storage
 type Service struct {
@@ -146,7 +146,7 @@ func (ws *Service) runScheduler() {
 	time.Sleep(time.Until(nextRun))
 
 	// Collect weather data immediately
-	ws.collectWeatherData()
+	ws.CollectWeatherData()
 
 	// Create ticker for 30-minute intervals
 	ticker := time.NewTicker(30 * time.Minute)
@@ -155,7 +155,7 @@ func (ws *Service) runScheduler() {
 	for {
 		select {
 		case <-ticker.C:
-			ws.collectWeatherData()
+			ws.CollectWeatherData()
 		case <-ws.stopChan:
 			return
 		}
@@ -187,15 +187,25 @@ func getNextScheduledTime() time.Time {
 	return nextTime
 }
 
-// collectWeatherData fetches and stores weather data
-func (ws *Service) collectWeatherData() {
+// CollectWeatherData fetches and stores weather data with retry and fallback mechanism
+func (ws *Service) CollectWeatherData() {
 	logger.Logger.WithField("source", ws.sourceName).Info("Collecting weather data")
 
-	// Fetch weather data
-	weatherData, err := ws.api.FetchWeather()
+	// Get retry configuration from environment
+	retryAttempts := getRetryAttempts()
+	retryInterval := getRetryInterval()
+
+	// Try primary API with retries
+	weatherData, err := ws.fetchWeatherWithRetry(ws.api, retryAttempts, retryInterval)
 	if err != nil {
-		logger.Logger.WithError(err).Error("Error fetching weather data")
-		return
+		logger.Logger.WithError(err).Warn("Primary API failed, trying fallback sources")
+
+		// Try fallback APIs
+		weatherData, err = ws.tryFallbackAPIs(retryAttempts, retryInterval)
+		if err != nil {
+			logger.Logger.WithError(err).Error("All weather APIs failed")
+			return
+		}
 	}
 
 	// Store weather data in database
@@ -205,6 +215,89 @@ func (ws *Service) collectWeatherData() {
 	}
 
 	logger.Logger.WithField("data", weatherData).Info("Weather data collected and stored successfully")
+}
+
+// fetchWeatherWithRetry attempts to fetch weather data with retry mechanism
+func (ws *Service) fetchWeatherWithRetry(api Api, attempts int, intervalSeconds int) (Data, error) {
+	var lastErr error
+
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			logger.Logger.WithFields(logger.Fields{
+				"attempt": i + 1,
+				"total":   attempts,
+				"source":  api.GetSource(),
+			}).Info("Retrying weather data fetch")
+
+			time.Sleep(time.Duration(intervalSeconds) * time.Second)
+		}
+
+		data, err := api.FetchWeather()
+		if err == nil {
+			return data, nil
+		}
+
+		lastErr = err
+		logger.Logger.WithFields(logger.Fields{
+			"attempt": i + 1,
+			"total":   attempts,
+			"source":  api.GetSource(),
+		}).WithError(err).Warn("Weather data fetch attempt failed")
+	}
+
+	return Data{}, fmt.Errorf("failed after %d attempts: %w", attempts, lastErr)
+}
+
+// tryFallbackAPIs attempts to fetch weather data from fallback sources
+func (ws *Service) tryFallbackAPIs(retryAttempts int, retryInterval int) (Data, error) {
+	fallbackSources := []string{
+		os.Getenv("WEATHER_SOURCE_FALLBACK_1"),
+		os.Getenv("WEATHER_SOURCE_FALLBACK_2"),
+	}
+
+	for _, source := range fallbackSources {
+		if source == "" {
+			continue
+		}
+
+		logger.Logger.WithField("fallback_source", source).Info("Trying fallback weather source")
+
+		api, err := ApiFactory(source)
+		if err != nil {
+			logger.Logger.WithField("source", source).WithError(err).Warn("Failed to create fallback API")
+			continue
+		}
+
+		data, err := ws.fetchWeatherWithRetry(api, retryAttempts, retryInterval)
+		if err == nil {
+			logger.Logger.WithField("source", source).Info("Successfully fetched data from fallback source")
+			return data, nil
+		}
+
+		logger.Logger.WithField("source", source).WithError(err).Warn("Fallback source failed")
+	}
+
+	return Data{}, fmt.Errorf("all fallback sources failed")
+}
+
+// getRetryAttempts returns the retry attempts from environment or default
+func getRetryAttempts() int {
+	if attemptsStr := os.Getenv("WEATHER_RETRY_ATTEMPTS"); attemptsStr != "" {
+		if attempts, err := strconv.Atoi(attemptsStr); err == nil && attempts > 0 {
+			return attempts
+		}
+	}
+	return 3 // default
+}
+
+// getRetryInterval returns the retry interval from environment or default
+func getRetryInterval() int {
+	if intervalStr := os.Getenv("WEATHER_RETRY_INTERVAL"); intervalStr != "" {
+		if interval, err := strconv.Atoi(intervalStr); err == nil && interval > 0 {
+			return interval
+		}
+	}
+	return 30 // default in seconds
 }
 
 // storeWeatherData stores weather data in the SQLite database
