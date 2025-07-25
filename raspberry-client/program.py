@@ -4,8 +4,9 @@ import sys
 import logging
 import signal
 from PyQt5.QtCore import QTimer, Qt
-from PyQt5.QtGui import QPixmap, QFontDatabase
-from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout, QScrollArea, QGridLayout, QGraphicsOpacityEffect
+from PyQt5.QtGui import QFontDatabase
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QScrollArea, QGridLayout, QGraphicsOpacityEffect, \
+    QHBoxLayout
 
 from ui_components import UIComponentFactory
 from weather_data import WeatherDataManager
@@ -17,7 +18,7 @@ SCREEN_HEIGHT = 1929
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
@@ -34,7 +35,7 @@ def setup_signal_handling():
     signal.signal(signal.SIGTERM, signal_handler)  # kill command
 
     # Wake up PyQt event loop every 500 ms to check for signals
-    check_signal_timer = QTimer()
+    check_signal_timer: QTimer = QTimer()
     check_signal_timer.start(500)
     check_signal_timer.timeout.connect(lambda: None)  # Do nothing, just wake up
 
@@ -45,6 +46,7 @@ class GUI(QWidget):
     def __init__(self, project_dir):
         super().__init__()
         self.logger = logging.getLogger(__name__)
+        # TODO: init gpio
         self.gpio = None
 
         self.project_dir = project_dir
@@ -62,6 +64,7 @@ class GUI(QWidget):
         # State tracking
         self.last_md5 = ''
         self.winner_index = 0
+        self.winner_icons = []
         self.current_weather_data = []
 
         # Timers
@@ -85,6 +88,8 @@ class GUI(QWidget):
         self.main_layout = QVBoxLayout()
         self.central_widget = QWidget()
 
+
+
         # self.init_ui()
 
     def _setup_ui(self):
@@ -97,7 +102,7 @@ class GUI(QWidget):
         self.title_time = self.ui_factory.create_label('', 'TitleHM', [540, 150])
 
         # Winner indicators
-        self.winner_layout = self._create_winner_layout()
+        self.winner_layout = self._create_winner_icon_layout()
 
         # Source labels
         self.source_layout = self._create_source_layout()
@@ -137,31 +142,28 @@ class GUI(QWidget):
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.main_layout.addWidget(scroll_area)
 
-    def _create_winner_layout(self):
-        """Create a winner indicator layout"""
-        layout = QGridLayout()
+    def _create_winner_icon_layout(self):
+        """Create a winner icon layout"""
+        layout = QHBoxLayout()
         layout.setSpacing(9)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        try:
-            pix_winner = QPixmap(':/Icon/winner.png')
-            self.logger.debug("Loaded winner icon")
-        except Exception as e:
-            self.logger.error(f"Failed to load winner icon: {e}")
-            pix_winner = QPixmap()
-
-        self.winner_labels = []
-
         for i in range(3):
-            label = self.ui_factory.create_label('', 'Winner', [174, 45])
-            label.setPixmap(pix_winner)
-            opacity = QGraphicsOpacityEffect()
-            opacity.setOpacity(0)
-            label.setGraphicsEffect(opacity)
-            self.winner_labels.append(label)
-            layout.addWidget(label, 0, i)
+            icon = self.ui_factory.create_winner_widget()
+            icon.setFixedSize(174,45)
+            self.winner_icons.append(icon)
+            layout.addWidget(icon)
 
         return layout
+
+    def _show_winner_icon(self, winner_index):
+        self.logger.info(f"Showing winner icon for index {winner_index}, total icons: {len(self.winner_icons)}")
+        for index, icon in enumerate(self.winner_icons):
+            icon_addr = hex(id(icon))
+            if index == winner_index:
+                icon.show()
+            else:
+                icon.dismiss()
 
     def _create_source_layout(self):
         """Create source labels layout"""
@@ -236,7 +238,6 @@ class GUI(QWidget):
 
             self.logger.info(f"Data file changed, refreshing (MD5: {current_md5})")
             self.last_md5 = current_md5
-            self._stop_winner_animation()
 
             # Load and parse data
             json_dicts = read_json_lines(self.data_path)
@@ -303,7 +304,7 @@ class GUI(QWidget):
 
         self.current_weather_data = weather_list
         self.content_widget.setObjectName(f'Contents{self.winner_index}')
-        self._start_winner_animation(12)
+        self._show_winner_icon(self.winner_index)
 
     def _update_weather_panel(self, index, weather):
         """Update an individual weather panel"""
@@ -358,36 +359,6 @@ class GUI(QWidget):
         panel.setLayout(layout)
 
         self.past_weather_scroll.setWidget(panel)
-
-    def _start_winner_animation(self, interval):
-        """Start winner indicator animation"""
-        self.logger.debug(f"Starting winner animation with interval {interval}ms")
-
-        self.winner_opacity = 0
-        self.winner_direction = 1
-
-        def update_opacity():
-            self.winner_opacity += self.winner_direction
-            if self.winner_opacity % 100 == 0:
-                self.winner_direction = -self.winner_direction
-
-            opacity = QGraphicsOpacityEffect()
-            opacity.setOpacity(self.winner_opacity / 100)
-            self.winner_labels[self.winner_index].setGraphicsEffect(opacity)
-
-        self.winner_timer.setInterval(interval)
-        self.winner_timer.timeout.connect(update_opacity)
-        self.winner_timer.start()
-
-    def _stop_winner_animation(self):
-        """Stop winner indicator animation"""
-        self.logger.debug("Stopping winner animation")
-
-        self.winner_timer.stop()
-        if hasattr(self, 'winner_index') and self.winner_index < len(self.winner_labels):
-            opacity = QGraphicsOpacityEffect()
-            opacity.setOpacity(0)
-            self.winner_labels[self.winner_index].setGraphicsEffect(opacity)
 
     def _start_data_refresh(self, interval):
         """Start automatic data refresh"""

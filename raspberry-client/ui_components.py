@@ -1,7 +1,112 @@
-from PyQt5.QtWidgets import *
-from PyQt5.QtCore import *
+from PyQt5.QtCore import QPropertyAnimation, QEasingCurve
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPixmap
+from PyQt5.QtWidgets import QGraphicsOpacityEffect, QLabel, QFrame, QGridLayout, QWidget
 
 from weather_data import WeatherDataManager
+import resources_rc
+
+
+class BreathingIcon(QLabel):
+    def __init__(self, pixmap_path, duration=1500, min_opacity=0.2, max_opacity=1.0, auto_start=False):
+        """
+        Create a breathing light animation with a PNG image.
+
+        Args:
+            pixmap_path (str): Path to the PNG image file
+            duration (int): Duration of each breathing phase in milliseconds (default: 1500)
+            min_opacity (float): Minimum opacity value (0.0 to 1.0, default: 0.2)
+            max_opacity (float): Maximum opacity value (0.0 to 1.0, default: 1.0)
+            auto_start (bool): Start the animation automatically (default: False)
+        """
+        super().__init__()
+
+        # Validate opacity parameters
+        if not (0.0 <= min_opacity <= 1.0):
+            raise ValueError("min_opacity must be between 0.0 and 1.0")
+        if not (0.0 <= max_opacity <= 1.0):
+            raise ValueError("max_opacity must be between 0.0 and 1.0")
+        if min_opacity >= max_opacity:
+            raise ValueError("min_opacity must be less than max_opacity")
+
+        # Store parameters
+        self.duration = duration
+        self.min_opacity = min_opacity
+        self.max_opacity = max_opacity
+
+        # Set up the image
+        self.setPixmap(QPixmap(pixmap_path))
+        self.setAlignment(Qt.AlignCenter)
+
+        # Create opacity effect
+        self.opacity_effect = QGraphicsOpacityEffect()
+        self.setGraphicsEffect(self.opacity_effect)
+
+        # Create opacity animation
+        self.animation: QPropertyAnimation = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.animation.setDuration(self.duration)
+        self.animation.setStartValue(self.min_opacity)
+        self.animation.setEndValue(self.max_opacity)
+        self.animation.setEasingCurve(QEasingCurve.InOutSine)
+
+        # Connect to create a breathing effect
+        self.animation.finished.connect(self.reverse_animation)
+        self.breathing_in = True
+
+        if auto_start:
+            self.show()
+        else:
+            self.dismiss()
+
+    def reverse_animation(self):
+        """Reverse the animation direction """
+        if self.breathing_in:
+            # Now breathe out (fade out)
+            self.animation.setStartValue(self.max_opacity)
+            self.animation.setEndValue(self.min_opacity)
+            self.breathing_in = False
+        else:
+            # Now breathe in (fade in)
+            self.animation.setStartValue(self.min_opacity)
+            self.animation.setEndValue(self.max_opacity)
+            self.breathing_in = True
+
+        self.animation.start()
+
+    def set_duration(self, duration):
+        """Change the animation duration."""
+        self.duration = duration
+        self.animation.setDuration(duration)
+
+    def set_opacity_range(self, min_opacity, max_opacity):
+        """Change the opacity range."""
+        # Validate new opacity parameters
+        if not (0.0 <= min_opacity <= 1.0):
+            raise ValueError("min_opacity must be between 0.0 and 1.0")
+        if not (0.0 <= max_opacity <= 1.0):
+            raise ValueError("max_opacity must be between 0.0 and 1.0")
+        if min_opacity >= max_opacity:
+            raise ValueError("min_opacity must be less than max_opacity")
+
+        self.min_opacity = min_opacity
+        self.max_opacity = max_opacity
+
+        # Update current animation values if needed
+        if self.breathing_in:
+            self.animation.setStartValue(min_opacity)
+            self.animation.setEndValue(max_opacity)
+        else:
+            self.animation.setStartValue(max_opacity)
+            self.animation.setEndValue(min_opacity)
+
+    def show(self):
+        """Start the breathing animation and make the widget visible."""
+        self.animation.start()
+
+    def dismiss(self):
+        """Stop the breathing animation and make the widget invisible."""
+        self.animation.stop()
+        self.opacity_effect.setOpacity(0)
 
 
 class UIComponentFactory:
@@ -107,8 +212,12 @@ class UIComponentFactory:
     def get_wind_html(humidity, wind_speed, wind_dir, icon_dir=None, size_index=0):
         """Generate HTML for wind direction with icon using QRC resources"""
         if size_index == 0:
-            img_path = f'qrc:/Icon/wd_l/{360-wind_dir}_wd_l.png'
+            img_path = f':/Icon/wd_l/{360-wind_dir}_wd_l.png'
         else:
-            img_path = f'qrc:/Icon/wd_s/{360-wind_dir}_wd_s.png'
+            img_path = f':/Icon/wd_s/{360-wind_dir}_wd_s.png'
 
         return f'<p>{humidity}%&nbsp;&nbsp;{wind_speed}m/s&nbsp;&nbsp;{int(wind_dir)}<img src="{img_path}" /></p>'
+
+    @staticmethod
+    def create_winner_widget() -> BreathingIcon:
+        return BreathingIcon(':/Icon/winner.png')
