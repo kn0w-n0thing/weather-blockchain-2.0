@@ -851,3 +851,405 @@ func TestConsensusEngine_GapDetectionInReceiveBlock(t *testing.T) {
 	// Gap block should be in pending blocks
 	assert.Contains(t, ce.pendingBlocks, gapBlock.Hash, "Gap block should be stored in pending blocks")
 }
+
+// TestExecuteChainReorganization tests the chain reorganization function for network partition recovery
+func TestExecuteChainReorganization(t *testing.T) {
+	// Create a new blockchain
+	bc := block.NewBlockchain("./test_data")
+
+	// Create genesis block
+	genesisBlock := &block.Block{
+		Index:              0,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           block.PrevHashOfGenesis,
+		Data:               "Genesis Block",
+		ValidatorAddress:   "genesis",
+		ValidatorPublicKey: []byte("genesis-pubkey"),
+		Signature:          []byte{},
+	}
+	genesisBlock.StoreHash()
+	err := bc.AddBlock(genesisBlock)
+	require.NoError(t, err)
+
+	// Create mock services
+	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
+	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
+
+	// Create consensus engine
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+
+	// Create blocks for rollback (old chain)
+	oldBlock1 := &block.Block{
+		Index:              1,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           genesisBlock.Hash,
+		Data:               "Old Block 1",
+		ValidatorAddress:   "validator-old",
+		ValidatorPublicKey: []byte("validator-old-pubkey"),
+		Signature:          []byte{},
+	}
+	oldBlock1.StoreHash()
+	oldBlock1.Signature = []byte(fmt.Sprintf("signed-%s-by-validator-old", oldBlock1.Hash))
+
+	oldBlock2 := &block.Block{
+		Index:              2,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           oldBlock1.Hash,
+		Data:               "Old Block 2",
+		ValidatorAddress:   "validator-old",
+		ValidatorPublicKey: []byte("validator-old-pubkey"),
+		Signature:          []byte{},
+	}
+	oldBlock2.StoreHash()
+	oldBlock2.Signature = []byte(fmt.Sprintf("signed-%s-by-validator-old", oldBlock2.Hash))
+
+	// Create blocks for apply (new chain)
+	newBlock1 := &block.Block{
+		Index:              1,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           genesisBlock.Hash,
+		Data:               "New Block 1",
+		ValidatorAddress:   "validator-new",
+		ValidatorPublicKey: []byte("validator-new-pubkey"),
+		Signature:          []byte{},
+	}
+	newBlock1.StoreHash()
+	newBlock1.Signature = []byte(fmt.Sprintf("signed-%s-by-validator-new", newBlock1.Hash))
+
+	newBlock2 := &block.Block{
+		Index:              2,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           newBlock1.Hash,
+		Data:               "New Block 2",
+		ValidatorAddress:   "validator-new",
+		ValidatorPublicKey: []byte("validator-new-pubkey"),
+		Signature:          []byte{},
+	}
+	newBlock2.StoreHash()
+	newBlock2.Signature = []byte(fmt.Sprintf("signed-%s-by-validator-new", newBlock2.Hash))
+
+	newBlock3 := &block.Block{
+		Index:              3,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           newBlock2.Hash,
+		Data:               "New Block 3",
+		ValidatorAddress:   "validator-new",
+		ValidatorPublicKey: []byte("validator-new-pubkey"),
+		Signature:          []byte{},
+	}
+	newBlock3.StoreHash()
+	newBlock3.Signature = []byte(fmt.Sprintf("signed-%s-by-validator-new", newBlock3.Hash))
+
+	// Add old blocks to pending blocks and forks to simulate existing state
+	ce.pendingBlocks[oldBlock1.Hash] = oldBlock1
+	ce.pendingBlocks[oldBlock2.Hash] = oldBlock2
+	ce.forks[1] = []*block.Block{oldBlock1}
+	ce.forks[2] = []*block.Block{oldBlock2}
+
+	// Execute chain reorganization
+	blocksToRollback := []*block.Block{oldBlock2, oldBlock1}
+	blocksToApply := []*block.Block{newBlock1, newBlock2, newBlock3}
+	newHead := newBlock3
+
+	err = ce.executeChainReorganization(blocksToRollback, blocksToApply, newHead)
+	assert.NoError(t, err, "Chain reorganization should complete without error")
+
+	// Verify rollback effects
+	assert.NotContains(t, ce.pendingBlocks, oldBlock1.Hash, "Old block 1 should be removed from pending blocks")
+	assert.NotContains(t, ce.pendingBlocks, oldBlock2.Hash, "Old block 2 should be removed from pending blocks")
+	assert.Empty(t, ce.forks[1], "Forks at height 1 should be cleared")
+	assert.Empty(t, ce.forks[2], "Forks at height 2 should be cleared")
+}
+
+// TestExecuteChainReorganizationEmptyArrays tests chain reorganization with empty block arrays
+func TestExecuteChainReorganizationEmptyArrays(t *testing.T) {
+	// Create a new blockchain
+	bc := block.NewBlockchain("./test_data")
+
+	// Create genesis block
+	genesisBlock := &block.Block{
+		Index:              0,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           block.PrevHashOfGenesis,
+		Data:               "Genesis Block",
+		ValidatorAddress:   "genesis",
+		ValidatorPublicKey: []byte("genesis-pubkey"),
+		Signature:          []byte{},
+	}
+	genesisBlock.StoreHash()
+	err := bc.AddBlock(genesisBlock)
+	require.NoError(t, err)
+
+	// Create mock services
+	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
+	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
+
+	// Create consensus engine
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+
+	// Test with empty arrays
+	err = ce.executeChainReorganization([]*block.Block{}, []*block.Block{}, nil)
+	assert.NoError(t, err, "Chain reorganization with empty arrays should not fail")
+}
+
+// TestExecuteChainReorganizationNilNewHead tests chain reorganization with nil new head
+func TestExecuteChainReorganizationNilNewHead(t *testing.T) {
+	// Create a new blockchain
+	bc := block.NewBlockchain("./test_data")
+
+	// Create genesis block
+	genesisBlock := &block.Block{
+		Index:              0,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           block.PrevHashOfGenesis,
+		Data:               "Genesis Block",
+		ValidatorAddress:   "genesis",
+		ValidatorPublicKey: []byte("genesis-pubkey"),
+		Signature:          []byte{},
+	}
+	genesisBlock.StoreHash()
+	err := bc.AddBlock(genesisBlock)
+	require.NoError(t, err)
+
+	// Create mock services
+	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
+	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
+
+	// Create consensus engine
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+
+	// Create a block for rollback
+	blockToRollback := &block.Block{
+		Index:              1,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           genesisBlock.Hash,
+		Data:               "Block to rollback",
+		ValidatorAddress:   "validator-old",
+		ValidatorPublicKey: []byte("validator-old-pubkey"),
+		Signature:          []byte{},
+	}
+	blockToRollback.StoreHash()
+	blockToRollback.Signature = []byte(fmt.Sprintf("signed-%s-by-validator-old", blockToRollback.Hash))
+
+	// Add to pending blocks
+	ce.pendingBlocks[blockToRollback.Hash] = blockToRollback
+
+	// Test with nil new head
+	err = ce.executeChainReorganization([]*block.Block{blockToRollback}, []*block.Block{}, nil)
+	assert.NoError(t, err, "Chain reorganization with nil new head should not fail")
+
+	// Verify block was removed from pending
+	assert.NotContains(t, ce.pendingBlocks, blockToRollback.Hash, "Block should be removed from pending blocks")
+}
+
+// TestRevertValidatorChanges tests the validator changes reversion function
+func TestRevertValidatorChanges(t *testing.T) {
+	// Create a new blockchain
+	bc := block.NewBlockchain("./test_data")
+
+	// Create genesis block
+	genesisBlock := &block.Block{
+		Index:              0,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           block.PrevHashOfGenesis,
+		Data:               "Genesis Block",
+		ValidatorAddress:   "genesis",
+		ValidatorPublicKey: []byte("genesis-pubkey"),
+		Signature:          []byte{},
+	}
+	genesisBlock.StoreHash()
+	err := bc.AddBlock(genesisBlock)
+	require.NoError(t, err)
+
+	// Create mock services
+	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
+	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
+
+	// Create consensus engine
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+
+	// Create a test block with validator information
+	testBlock := &block.Block{
+		Index:              1,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           genesisBlock.Hash,
+		Data:               "Test Block with Validator Changes",
+		ValidatorAddress:   "test-validator",
+		ValidatorPublicKey: []byte("test-pubkey"),
+		Signature:          []byte{},
+	}
+	testBlock.StoreHash()
+	testBlock.Signature = []byte(fmt.Sprintf("signed-%s-by-test-validator", testBlock.Hash))
+
+	// Test that revertValidatorChanges runs without panic
+	assert.NotPanics(t, func() {
+		ce.revertValidatorChanges(testBlock)
+	}, "revertValidatorChanges should not panic")
+
+	// In the actual implementation, this would:
+	// - Revert validator stake changes
+	// - Remove newly added validators
+	// - Restore previous validator states
+	// - Undo penalty/reward applications
+}
+
+// TestApplyValidatorChanges tests the validator changes application function
+func TestApplyValidatorChanges(t *testing.T) {
+	// Create a new blockchain
+	bc := block.NewBlockchain("./test_data")
+
+	// Create genesis block
+	genesisBlock := &block.Block{
+		Index:              0,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           block.PrevHashOfGenesis,
+		Data:               "Genesis Block",
+		ValidatorAddress:   "genesis",
+		ValidatorPublicKey: []byte("genesis-pubkey"),
+		Signature:          []byte{},
+	}
+	genesisBlock.StoreHash()
+	err := bc.AddBlock(genesisBlock)
+	require.NoError(t, err)
+
+	// Create mock services
+	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
+	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
+
+	// Create consensus engine
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+
+	// Create a test block with validator information
+	testBlock := &block.Block{
+		Index:              1,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           genesisBlock.Hash,
+		Data:               "Test Block with Validator Changes",
+		ValidatorAddress:   "new-validator",
+		ValidatorPublicKey: []byte("new-validator-pubkey"),
+		Signature:          []byte{},
+	}
+	testBlock.StoreHash()
+	testBlock.Signature = []byte(fmt.Sprintf("signed-%s-by-new-validator", testBlock.Hash))
+
+	// Test that applyValidatorChanges runs without error
+	err = ce.applyValidatorChanges(testBlock)
+	assert.NoError(t, err, "applyValidatorChanges should not return error")
+
+	// In the actual implementation, this would:
+	// - Apply validator stake changes
+	// - Add new validators to the set
+	// - Update validator statuses
+	// - Process penalties and rewards
+}
+
+// TestChainReorganizationComplexScenario tests a complex chain reorganization scenario
+func TestChainReorganizationComplexScenario(t *testing.T) {
+	// Create a new blockchain
+	bc := block.NewBlockchain("./test_data")
+
+	// Create genesis block
+	genesisBlock := &block.Block{
+		Index:              0,
+		Timestamp:          time.Now().Unix(),
+		PrevHash:           block.PrevHashOfGenesis,
+		Data:               "Genesis Block",
+		ValidatorAddress:   "genesis",
+		ValidatorPublicKey: []byte("genesis-pubkey"),
+		Signature:          []byte{},
+	}
+	genesisBlock.StoreHash()
+	err := bc.AddBlock(genesisBlock)
+	require.NoError(t, err)
+
+	// Create mock services
+	mockTimeSync := NewMockTimeSync()
+	mockValidatorSelection := NewMockValidatorSelection()
+	mockBroadcaster := NewMockBroadcaster()
+	mockWeatherService := NewMockWeatherService()
+
+	// Create consensus engine
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+
+	// Simulate network partition scenario:
+	// - Old chain: Genesis -> A1 -> A2 -> A3
+	// - New chain: Genesis -> B1 -> B2 -> B3 -> B4 (longer chain)
+
+	// Create old chain blocks (shorter chain during partition)
+	oldChainBlocks := make([]*block.Block, 3)
+	for i := 0; i < 3; i++ {
+		prevHash := genesisBlock.Hash
+		if i > 0 {
+			prevHash = oldChainBlocks[i-1].Hash
+		}
+
+		oldChainBlocks[i] = &block.Block{
+			Index:              uint64(i + 1),
+			Timestamp:          time.Now().Unix(),
+			PrevHash:           prevHash,
+			Data:               fmt.Sprintf("Old Chain Block %d", i+1),
+			ValidatorAddress:   fmt.Sprintf("validator-A%d", i+1),
+			ValidatorPublicKey: []byte(fmt.Sprintf("validator-A%d-pubkey", i+1)),
+			Signature:          []byte{},
+		}
+		oldChainBlocks[i].StoreHash()
+		oldChainBlocks[i].Signature = []byte(fmt.Sprintf("signed-%s-by-validator-A%d", oldChainBlocks[i].Hash, i+1))
+
+		// Add to pending blocks and forks
+		ce.pendingBlocks[oldChainBlocks[i].Hash] = oldChainBlocks[i]
+		ce.forks[uint64(i+1)] = append(ce.forks[uint64(i+1)], oldChainBlocks[i])
+	}
+
+	// Create new chain blocks (longer chain after partition recovery)
+	newChainBlocks := make([]*block.Block, 4)
+	for i := 0; i < 4; i++ {
+		prevHash := genesisBlock.Hash
+		if i > 0 {
+			prevHash = newChainBlocks[i-1].Hash
+		}
+
+		newChainBlocks[i] = &block.Block{
+			Index:              uint64(i + 1),
+			Timestamp:          time.Now().Unix(),
+			PrevHash:           prevHash,
+			Data:               fmt.Sprintf("New Chain Block %d", i+1),
+			ValidatorAddress:   fmt.Sprintf("validator-B%d", i+1),
+			ValidatorPublicKey: []byte(fmt.Sprintf("validator-B%d-pubkey", i+1)),
+			Signature:          []byte{},
+		}
+		newChainBlocks[i].StoreHash()
+		newChainBlocks[i].Signature = []byte(fmt.Sprintf("signed-%s-by-validator-B%d", newChainBlocks[i].Hash, i+1))
+	}
+
+	// Execute chain reorganization (switch from old chain to new chain)
+	err = ce.executeChainReorganization(oldChainBlocks, newChainBlocks, newChainBlocks[3])
+	assert.NoError(t, err, "Complex chain reorganization should complete without error")
+
+	// Verify all old chain blocks were removed from pending blocks
+	for i, oldBlock := range oldChainBlocks {
+		assert.NotContains(t, ce.pendingBlocks, oldBlock.Hash, 
+			fmt.Sprintf("Old chain block %d should be removed from pending blocks", i+1))
+	}
+
+	// Verify forks were cleared for old chain blocks
+	for i := 1; i <= 3; i++ {
+		assert.Empty(t, ce.forks[uint64(i)], 
+			fmt.Sprintf("Forks at height %d should be cleared", i))
+	}
+
+	// The test demonstrates successful handling of:
+	// - Multiple block rollbacks
+	// - Multiple block applications
+	// - Complex fork state management
+	// - Network partition recovery simulation
+}

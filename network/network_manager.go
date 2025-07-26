@@ -109,6 +109,7 @@ type Node struct {
 	ID              string // Address
 	Port            int
 	listener        net.Listener
+	listenerMutex   sync.RWMutex // Protects listener access
 	Peers           map[string]string // map[id]address
 	peerMutex       sync.RWMutex
 	connections     []net.Conn
@@ -185,13 +186,23 @@ func (node *Node) Start() error {
 	go func() {
 		log.Debug("Start: Beginning to accept connections")
 		for node.isRunning {
+			// Safely check if listener is still available
+			node.listenerMutex.RLock()
+			currentListener := node.listener
+			node.listenerMutex.RUnlock()
+			
+			if currentListener == nil {
+				log.Debug("Connection acceptor: Listener is nil, exiting")
+				break
+			}
+			
 			// Set a deadline to avoid blocking forever
 			deadlineTime := time.Now().Add(1 * time.Second)
-			node.listener.(*net.TCPListener).SetDeadline(deadlineTime)
+			currentListener.(*net.TCPListener).SetDeadline(deadlineTime)
 
 			log.WithField("deadline", deadlineTime).Debug("Connection acceptor: Set accept deadline")
 
-			conn, err := node.listener.Accept()
+			conn, err := currentListener.Accept()
 			if err != nil {
 				if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
 					// This is just a timeout, continue the loop
@@ -311,13 +322,15 @@ func (node *Node) Stop() error {
 	node.connectionMutex.Unlock()
 	log.Debug("Stop: All connections closed")
 
-	// Close the listener
+	// Close the listener safely
+	node.listenerMutex.Lock()
 	if node.listener != nil {
 		log.WithField("address", node.listener.Addr()).Debug("Stop: Closing listener")
 		node.listener.Close()
 		node.listener = nil
 		log.Debug("Stop: Listener closed")
 	}
+	node.listenerMutex.Unlock()
 
 	// Shutdown mDNS server
 	if node.server != nil {

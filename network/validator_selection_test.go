@@ -603,7 +603,7 @@ type MockValidatorBlock struct {
 	parent           interface{}
 }
 
-func (mvb *MockValidatorBlock) ValidatorAddress() string {
+func (mvb *MockValidatorBlock) GetValidatorAddress() string {
 	return mvb.validatorAddress
 }
 
