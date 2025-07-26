@@ -178,7 +178,7 @@ class UIComponentFactory:
         # Wind info with icon
         wind_widget = UIComponentFactory.create_wind_widget(
             weather_data.humidity, weather_data.wind_speed,
-            weather_data.wind_direction, 1
+            weather_data.wind_direction, 1, 'left'
         )
         wind_widget.setObjectName('PastWeather')
         wind_widget.setFixedSize(320, 25)
@@ -206,16 +206,25 @@ class UIComponentFactory:
         return widget
 
     @staticmethod
-    def create_wind_widget(humidity, wind_speed, wind_dir, size_index=0):
-        """Create a Qt widget for wind information with a rotated wind direction icon"""
+    def create_wind_widget(humidity, wind_speed, wind_dir, size_index=0, alignment='center'):
+        """Create a Qt widget for wind information with a rotated wind direction icon
+        
+        Args:
+            humidity: Humidity percentage
+            wind_speed: Wind speed in m/s
+            wind_dir: Wind direction in degrees
+            size_index: 0 for large icon, 1 for small icon
+            alignment: 'center' for center alignment, 'left' for left alignment
+        """
         # Create the main container widget
         container = QWidget()
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        
-        # Add stretch before content to center horizontally
-        layout.addStretch()
+
+        # Add stretch before content only if center alignment
+        if alignment == 'center':
+            layout.addStretch()
         
         # Create text label for humidity and wind speed
         text = f'{humidity}%  {wind_speed}m/s  {int(wind_dir)}°'
@@ -243,9 +252,11 @@ class UIComponentFactory:
             wind_icon.setPixmap(rotated_pixmap)
         
         layout.addWidget(wind_icon)
-        
-        # Add stretch after content to center horizontally
-        layout.addStretch()
+
+        # Add stretch after content only if center alignment
+        if alignment == 'center':
+            layout.addStretch()
+
         container.setLayout(layout)
         
         return container
