@@ -24,5 +24,6 @@ source .venv/bin/activate
 python3 program.py
 
 # generate resources_rc.py
+sudo apt install pyqt5-dev-tools
 pyrcc5 -o resources_rc.py resources.qrc
 ```

@@ -207,22 +207,25 @@ class UIComponentFactory:
 
     @staticmethod
     def create_wind_widget(humidity, wind_speed, wind_dir, size_index=0):
-        """Create a Qt widget for wind information with rotated wind direction icon"""
-        # Create main container widget
+        """Create a Qt widget for wind information with a rotated wind direction icon"""
+        # Create the main container widget
         container = QWidget()
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
+        
+        # Add stretch before content to center horizontally
+        layout.addStretch()
         
         # Create text label for humidity and wind speed
         text = f'{humidity}%  {wind_speed}m/s  {int(wind_dir)}°'
         text_label = QLabel(text)
         layout.addWidget(text_label)
         
-        # Create wind direction icon with rotation
+        # Create a wind direction icon with rotation
         wind_icon = QLabel()
         
-        # Choose base icon based on size
+        # Choose the icon based on size
         if size_index == 0:
             base_icon_path = ':/icon/0_wd_l.png'
         else:
@@ -231,7 +234,7 @@ class UIComponentFactory:
         # Load and rotate the base icon
         original_pixmap = QPixmap(base_icon_path)
         if not original_pixmap.isNull():
-            # Create rotation transform
+            # Create the rotation transform
             transform = QTransform()
             transform.rotate(wind_dir)  # Rotate by wind direction angle
             
@@ -240,6 +243,9 @@ class UIComponentFactory:
             wind_icon.setPixmap(rotated_pixmap)
         
         layout.addWidget(wind_icon)
+        
+        # Add stretch after content to center horizontally
+        layout.addStretch()
         container.setLayout(layout)
         
         return container
