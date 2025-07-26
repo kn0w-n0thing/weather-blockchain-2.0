@@ -339,6 +339,9 @@ class GUI(QWidget):
         for i, weather in enumerate(past_weather_list):
             widget = self.ui_factory.create_past_weather_widget(weather, None)
             layout.addWidget(widget, i, 0)
+            # create 4 items at most
+            if i > 3:
+                break
 
         panel = QWidget()
         panel.setObjectName('PastWeatherPanel')
