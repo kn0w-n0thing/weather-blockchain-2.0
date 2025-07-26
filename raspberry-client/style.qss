@@ -61,19 +61,28 @@ QScrollArea{
 #PastWeatherPanel{
 	background-color:#ffffff;
 }
-#Contents0{
-	background-image:url("./Background/bg1n_540x1929.jpg")
+#Background0{
+	background-image:url(":/background/bg1n_540x1929.jpg");
+	background-repeat: no-repeat;
+    background-position: center center;
+    background-attachment: fixed;
 }
-#Contents1{
-	background-image:url("./Background/bg2n_540x1929.jpg")
+#Background1{
+	background-image:url(":/background/bg2n_540x1929.jpg");
+	background-repeat: no-repeat;
+    background-position: center center;
+    background-attachment: fixed;
 }
-#Contents2{
-	background-image:url("./Background/bg3n_540x1929.jpg")
+#Background2{
+	background-image:url(":/background/bg3n_540x1929.jpg");
+	background-repeat: no-repeat;
+    background-position: center center;
+    background-attachment: fixed;
 }
 #CurrentWeatherTitleCN{
-	background-image:url("./Background/title_cn.png")
+	background-image:url(":/background/title_cn.png")
 }
 #CurrentWeatherTitleEN{
-	background-image:url("./Background/title_en.png")
+	background-image:url(":/background/title_en.png")
 }
 

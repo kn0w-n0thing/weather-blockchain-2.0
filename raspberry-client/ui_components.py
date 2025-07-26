@@ -1,10 +1,9 @@
 from PyQt5.QtCore import QPropertyAnimation, QEasingCurve
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtWidgets import QGraphicsOpacityEffect, QLabel, QFrame, QGridLayout, QWidget
+from PyQt5.QtGui import QPixmap, QTransform
+from PyQt5.QtWidgets import QGraphicsOpacityEffect, QLabel, QFrame, QGridLayout, QWidget, QHBoxLayout
 
 from weather_data import WeatherDataManager
-import resources_rc
 
 
 class BreathingIcon(QLabel):
@@ -122,8 +121,7 @@ class UIComponentFactory:
         if size:
             label.setFixedSize(size[0], size[1])
         label.setWordWrap(True)
-        if alignment:
-            label.setAlignment(alignment)
+        label.setAlignment(alignment)
         return label
 
     @staticmethod
@@ -178,13 +176,12 @@ class UIComponentFactory:
         )
 
         # Wind info with icon
-        wind_html = UIComponentFactory.get_wind_html(
+        wind_widget = UIComponentFactory.create_wind_widget(
             weather_data.humidity, weather_data.wind_speed,
-            weather_data.wind_direction, None, 1
+            weather_data.wind_direction, 1
         )
-        wind_label = UIComponentFactory.create_label(
-            wind_html, 'PastWeather', [320, 25], Qt.AlignLeft | Qt.AlignVCenter
-        )
+        wind_widget.setObjectName('PastWeather')
+        wind_widget.setFixedSize(320, 25)
 
         source_label = UIComponentFactory.create_label(
             WeatherDataManager.get_display_source(weather_data.source),
@@ -196,7 +193,7 @@ class UIComponentFactory:
         layout.addWidget(time_label, 1, 0, 2, 1)
         layout.addWidget(condition_label, 0, 1, 1, 1)
         layout.addWidget(temp_label, 1, 1, 1, 1)
-        layout.addWidget(wind_label, 2, 1, 1, 1)
+        layout.addWidget(wind_widget, 2, 1, 1, 1)
         layout.addWidget(source_label, 3, 1, 1, 1)
 
         layout.setVerticalSpacing(0)
@@ -209,15 +206,44 @@ class UIComponentFactory:
         return widget
 
     @staticmethod
-    def get_wind_html(humidity, wind_speed, wind_dir, icon_dir=None, size_index=0):
-        """Generate HTML for wind direction with icon using QRC resources"""
+    def create_wind_widget(humidity, wind_speed, wind_dir, size_index=0):
+        """Create a Qt widget for wind information with rotated wind direction icon"""
+        # Create main container widget
+        container = QWidget()
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        
+        # Create text label for humidity and wind speed
+        text = f'{humidity}%  {wind_speed}m/s  {int(wind_dir)}°'
+        text_label = QLabel(text)
+        layout.addWidget(text_label)
+        
+        # Create wind direction icon with rotation
+        wind_icon = QLabel()
+        
+        # Choose base icon based on size
         if size_index == 0:
-            img_path = f':/Icon/wd_l/{360-wind_dir}_wd_l.png'
+            base_icon_path = ':/icon/0_wd_l.png'
         else:
-            img_path = f':/Icon/wd_s/{360-wind_dir}_wd_s.png'
-
-        return f'<p>{humidity}%&nbsp;&nbsp;{wind_speed}m/s&nbsp;&nbsp;{int(wind_dir)}<img src="{img_path}" /></p>'
+            base_icon_path = ':/icon/0_wd_s.png'
+        
+        # Load and rotate the base icon
+        original_pixmap = QPixmap(base_icon_path)
+        if not original_pixmap.isNull():
+            # Create rotation transform
+            transform = QTransform()
+            transform.rotate(wind_dir)  # Rotate by wind direction angle
+            
+            # Apply rotation to pixmap
+            rotated_pixmap = original_pixmap.transformed(transform, Qt.SmoothTransformation)
+            wind_icon.setPixmap(rotated_pixmap)
+        
+        layout.addWidget(wind_icon)
+        container.setLayout(layout)
+        
+        return container
 
     @staticmethod
     def create_winner_widget() -> BreathingIcon:
-        return BreathingIcon(':/Icon/winner.png')
+        return BreathingIcon(':/icon/winner.png')

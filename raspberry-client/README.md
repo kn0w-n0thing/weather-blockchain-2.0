@@ -22,4 +22,7 @@ python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 
 python3 program.py
+
+# generate resources_rc.py
+pyrcc5 -o resources_rc.py resources.qrc
 ```

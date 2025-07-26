@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QScrollArea, QGr
 
 from ui_components import UIComponentFactory
 from weather_data import WeatherDataManager
+import resources_rc
 
 # Constants
 SCREEN_WIDTH = 540
@@ -50,47 +51,35 @@ class GUI(QWidget):
         self.gpio = None
 
         self.project_dir = project_dir
-        self.icon_dir = os.path.join(project_dir, 'Icon')
         self.data_path = os.path.join(project_dir, 'WeatherData.txt')
-        try:
-            self.qss_style = read_file(os.path.join(project_dir, 'style.qss'))
-        except Exception as e:
-            self.logger.error(f"Failed to load QSS style: {e}")
-            self.qss_style = ""
 
         self.data_manager = WeatherDataManager()
         self.ui_factory = UIComponentFactory()
 
         # State tracking
         self.last_md5 = ''
-        self.winner_index = 0
+        self.winner_id = None
         self.winner_icons = []
         self.current_weather_data = []
 
         # Timers
-        self.winner_timer = QTimer()
         self.data_timer = QTimer()
 
         # Initialize UI
-        load_fonts(os.path.join(project_dir, 'Font'))
+        load_fonts()
         self._setup_ui()
         self._init_window()
 
         # Start operations
-        self.refresh_data()
+        self._refresh_data()
         self._start_data_refresh(1000)
 
         self.logger.info("Weather Display initialization complete")
 
-        # QRC resources are now compiled in, no need for icon_dir
         self.ui_factory = UIComponentFactory()
         self.data_manager = WeatherDataManager()
         self.main_layout = QVBoxLayout()
         self.central_widget = QWidget()
-
-
-
-        # self.init_ui()
 
     def _setup_ui(self):
         """Set up the main UI structure"""
@@ -112,35 +101,13 @@ class GUI(QWidget):
 
         # Past weather scroll area
         self.past_weather_scroll = QScrollArea(self)
-        self.past_weather_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.past_weather_scroll.setFixedSize(540, 1139)
+        # TODO: test code, change to ScrollBarAlwaysOff later
+        self.past_weather_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.past_weather_scroll.setFixedSize(SCREEN_WIDTH, SCREEN_HEIGHT)
 
         # Arrange all components
         self._arrange_components()
         self.logger.debug("UI setup complete")
-
-
-    def init_ui(self):
-        # Set window size
-        # self.setGeometry(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
-
-        # Create the main layout
-        # self.main_layout = QVBoxLayout()
-        # self.main_layout.setContentsMargins(0, 0, 0, 0)
-        # self.setLayout(self.main_layout)
-
-        # self.mainWidget.setFixedSize(540,1929)
-        # self.mainWidget.setLayout(self.qgl)
-        # Setup central widget with content layout
-        # self.central_widget.setObjectName("Background0")
-        central_layout = QVBoxLayout(self.central_widget)
-
-        # TODO: test code, to be deleted
-        scroll_area = QScrollArea()
-        scroll_area.setWidget(self.central_widget)
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.main_layout.addWidget(scroll_area)
 
     def _create_winner_icon_layout(self):
         """Create a winner icon layout"""
@@ -155,6 +122,21 @@ class GUI(QWidget):
             layout.addWidget(icon)
 
         return layout
+
+    def _set_background(self, winner_id):
+        """Set the background image based on winner ID"""
+        background_name = f'Background{winner_id}'
+        self.logger.info(f"Setting background to: {background_name}")
+        
+        self.content_widget.setObjectName(background_name)
+        
+        # Force stylesheet refresh
+        from PyQt5.QtWidgets import QApplication
+        app = QApplication.instance()
+        stylesheet = app.styleSheet()
+        app.setStyleSheet("")
+        app.setStyleSheet(stylesheet)
+        self.content_widget.repaint()
 
     def _show_winner_icon(self, winner_index):
         self.logger.info(f"Showing winner icon for index {winner_index}, total icons: {len(self.winner_icons)}")
@@ -185,7 +167,7 @@ class GUI(QWidget):
         main_layout.setSpacing(0)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Add spacers and main components
+        # Add spacers and main parts
         row = 0
         main_layout.addWidget(self.ui_factory.create_label('', 'Space', [540, 10]), row, 0); row += 1
         main_layout.addWidget(self.title_city, row, 0); row += 1
@@ -210,7 +192,7 @@ class GUI(QWidget):
 
         # Create the scrollable content widget
         self.content_widget = QWidget()
-        self.content_widget.setFixedSize(540, 1929)
+        self.content_widget.setFixedSize(SCREEN_WIDTH, SCREEN_HEIGHT)
         self.content_widget.setLayout(main_layout)
 
         # Set the main layout
@@ -218,7 +200,7 @@ class GUI(QWidget):
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.addWidget(self.content_widget)
         self.setLayout(vbox)
-        self.setGeometry(0, 0, 540, 1929)
+        self.setGeometry(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT)
 
     def _init_window(self):
         """Initialize window properties"""
@@ -227,7 +209,7 @@ class GUI(QWidget):
         self.showFullScreen()
         self.setCursor(Qt.BlankCursor)
 
-    def refresh_data(self):
+    def _refresh_data(self):
         """Refresh weather data from a file"""
         try:
             # Check if the file has changed
@@ -253,8 +235,7 @@ class GUI(QWidget):
             self._update_past_weather(json_dicts[:-1])
 
             # Apply styling and activate GPIO
-            self.setStyleSheet(self.qss_style)
-            if hasattr(self, 'winner_id') and self.gpio:
+            if self.winner_id and self.gpio:
                 self.gpio.switch_condition(self.winner_id)
 
         except Exception as e:
@@ -283,7 +264,6 @@ class GUI(QWidget):
 
                 # Check for the winner
                 if weather.is_winner:
-                    self.winner_index = i
                     self.winner_id = weather.weather_id
                     self.logger.info(f"Winner found: index={i}, id={weather.weather_id}, source={weather.source}")
 
@@ -303,8 +283,8 @@ class GUI(QWidget):
                 self.logger.error(f"Error processing weather entry {i}: {e}")
 
         self.current_weather_data = weather_list
-        self.content_widget.setObjectName(f'Contents{self.winner_index}')
-        self._show_winner_icon(self.winner_index)
+        self._set_background(self.winner_id)
+        self._show_winner_icon(self.winner_id)
 
     def _update_weather_panel(self, index, weather):
         """Update an individual weather panel"""
@@ -320,12 +300,18 @@ class GUI(QWidget):
         layout.itemAt(4).widget().setText(f'{weather.humidity}%')
         layout.itemAt(5).widget().setText(f'{weather.wind_speed}m/s')
 
-        # Wind direction with icon
-        wind_html = self.ui_factory.get_wind_html(
+        # Wind direction with icon - replace the label with wind widget
+        old_widget = layout.itemAt(6).widget()
+        layout.removeWidget(old_widget)
+        old_widget.deleteLater()
+        
+        wind_widget = self.ui_factory.create_wind_widget(
             weather.humidity, weather.wind_speed,
-            weather.wind_direction, None, 0
+            weather.wind_direction, 0
         )
-        layout.itemAt(6).widget().setText(wind_html)
+        wind_widget.setObjectName('CurrentWeather')
+        wind_widget.setFixedSize(174, 65)
+        layout.addWidget(wind_widget, 6, 0)
 
     def _update_past_weather(self, past_entries):
         """Update past weather display"""
@@ -365,7 +351,7 @@ class GUI(QWidget):
         self.logger.info(f"Starting data refresh timer with interval {interval}ms")
 
         self.data_timer.setInterval(interval)
-        self.data_timer.timeout.connect(self.refresh_data)
+        self.data_timer.timeout.connect(self._refresh_data)
         self.data_timer.start()
 
     def closeEvent(self, event):
@@ -406,21 +392,29 @@ def get_file_md5(path):
         logger.error(f"Error calculating MD5 for {path}: {e}")
         raise
 
-def load_fonts(dir_path):
-    """Load custom fonts from a directory"""
+def load_fonts():
+    """Load custom fonts from QRC resources"""
     logger = logging.getLogger(__name__)
     try:
         font_count = 0
-        for file in os.listdir(dir_path):
-            font_path = os.path.join(dir_path, file)
+        font_files = [
+            ':/font/Futura LT Bold.ttf',
+            ':/font/PingFang SC.ttf',
+            ':/font/方正兰亭特黑.TTF',
+            ':/font/苹方-简 细体.otf'
+        ]
+        
+        for font_path in font_files:
             if QFontDatabase.addApplicationFont(font_path) >= 0:
                 font_count += 1
-                logger.debug(f"Loaded font: {file}")
+                font_name = font_path.split('/')[-1]
+                logger.debug(f"Loaded font: {font_name}")
             else:
-                logger.warning(f"Failed to load font: {file}")
-        logger.info(f"Loaded {font_count} fonts from {dir_path}")
+                font_name = font_path.split('/')[-1]
+                logger.warning(f"Failed to load font: {font_name}")
+        logger.info(f"Loaded {font_count} fonts from QRC resources")
     except Exception as e:
-        logger.error(f"Error loading fonts from {dir_path}: {e}")
+        logger.error(f"Error loading fonts from QRC resources: {e}")
 
 
 def load_stylesheet(app, stylesheet_path):
@@ -453,7 +447,7 @@ def read_file(path, mode='r'):
 
 if __name__ == '__main__':
     application = QApplication(sys.argv)
-    load_stylesheet(application, 'new-style.qss')
+    load_stylesheet(application, 'style.qss')
     window = GUI("./")
     window.show()
     # window.showFullScreen()

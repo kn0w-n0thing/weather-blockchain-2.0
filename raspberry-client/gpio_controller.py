@@ -34,7 +34,7 @@ class GPIOController:
             raise
 
     def switch_condition(self, condition_id):
-        """Switch to specific weather condition LED"""
+        """Switch to the specific weather condition LED"""
         logger.info(f"Switching to condition {condition_id}")
         self.cleanup()
         self.setup_gpio()
@@ -50,7 +50,8 @@ class GPIOController:
                 GPIO.output(pin, GPIO.LOW)
                 logger.debug(f"Condition {i} ({name}) is OFF - pin {pin}")
 
-    def cleanup(self):
+    @staticmethod
+    def cleanup():
         """Clean up GPIO resources"""
         try:
             GPIO.cleanup()
