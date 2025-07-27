@@ -362,6 +362,11 @@ func (ce *Engine) calculateChainWork(head *block.Block) uint64 {
 
 // validateEntireChain validates an entire chain from genesis to the given head
 func (ce *Engine) validateEntireChain(head *block.Block) bool {
+	if head == nil {
+		log.Error("Cannot validate entire chain: head block is nil")
+		return false
+	}
+	
 	log.WithFields(logger.Fields{
 		"headHash":   head.Hash,
 		"headHeight": head.Index,

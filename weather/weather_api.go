@@ -74,7 +74,7 @@ func (api *OpenWeatherAPI) FetchWeather() (Data, error) {
 
 	responseCode := rawData["cod"].(float64)
 	if responseCode != 200 {
-		return data, fmt.Errorf(rawData["message"].(string))
+		return data, fmt.Errorf("API error: %s", rawData["message"].(string))
 	}
 
 	// Extract weather data
@@ -134,7 +134,7 @@ func (api *AccuWeatherAPI) FetchWeather() (Data, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return data, fmt.Errorf(resp.Status)
+		return data, fmt.Errorf("HTTP error: %s", resp.Status)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -223,7 +223,7 @@ func (api *XinzhiWeatherAPI) FetchWeather() (Data, error) {
 	}).Debug("Received raw weather data")
 
 	if results, ok := rawData["results"].([]interface{}); !ok {
-		return data, fmt.Errorf(rawData["status"].(string))
+		return data, fmt.Errorf("API status error: %s", rawData["status"].(string))
 	} else {
 		now := results[0].(map[string]interface{})["now"].(map[string]interface{})
 
@@ -330,7 +330,7 @@ func (api *MojiWeatherAPI) FetchWeather() (Data, error) {
 	}).Debug("Received raw weather data")
 
 	if _, ok := rawData["results"].([]interface{}); !ok {
-		return data, fmt.Errorf(rawData["rc"].(map[string]interface{})["p"].(string))
+		return data, fmt.Errorf("API response error: %s", rawData["rc"].(map[string]interface{})["p"].(string))
 	}
 
 	condition := rawData["data"].(map[string]interface{})["condition"].(map[string]interface{})
@@ -412,7 +412,7 @@ func (api *AzureWeatherAPI) FetchWeather() (Data, error) {
 	}).Debug("Received raw weather data")
 
 	if results, ok := rawData["results"].([]interface{}); !ok {
-		return data, fmt.Errorf(rawData["error"].(map[string]interface{})["message"].(string))
+		return data, fmt.Errorf("API error: %s", rawData["error"].(map[string]interface{})["message"].(string))
 	} else {
 		result := results[0].(map[string]interface{})
 

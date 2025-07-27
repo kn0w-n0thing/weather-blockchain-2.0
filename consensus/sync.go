@@ -145,35 +145,35 @@ func (ce *Engine) requestBlockRangeViaNetworkBroadcaster(startIndex, endIndex ui
 // monitorNetworkRecovery monitors for network partition recovery and triggers consensus reconciliation
 func (ce *Engine) monitorNetworkRecovery() {
 	log.Info("Starting network recovery monitor")
-	
+
 	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
 	defer ticker.Stop()
-	
+
 	lastPeerCount := 0
 	consecutiveHighPendingCount := 0
-	
+
 	for {
 		<-ticker.C
-		
+
 		// Get current network status
 		peerGetter, ok := ce.networkBroadcaster.(interface{ GetPeers() map[string]string })
 		if !ok {
 			continue
 		}
-		
+
 		peers := peerGetter.GetPeers()
 		currentPeerCount := len(peers)
 		pendingCount := ce.GetPendingBlockCount()
-		
+
 		log.WithFields(logger.Fields{
 			"currentPeers":  currentPeerCount,
 			"previousPeers": lastPeerCount,
 			"pendingBlocks": pendingCount,
 		}).Debug("Network recovery status check")
-		
+
 		// Detect network recovery scenarios
 		networkRecovered := false
-		
+
 		// Scenario 1: Peer count increased significantly (network partition healing)
 		if currentPeerCount > lastPeerCount && currentPeerCount >= 2 {
 			log.WithFields(logger.Fields{
@@ -182,13 +182,13 @@ func (ce *Engine) monitorNetworkRecovery() {
 			}).Info("Network partition recovery detected - peer count increased")
 			networkRecovered = true
 		}
-		
+
 		// Scenario 2: High pending block count indicates potential fork resolution needed
 		if pendingCount > 10 {
 			consecutiveHighPendingCount++
 			if consecutiveHighPendingCount >= 3 { // 3 consecutive checks with high pending
 				log.WithFields(logger.Fields{
-					"pendingBlocks": pendingCount,
+					"pendingBlocks":     pendingCount,
 					"consecutiveChecks": consecutiveHighPendingCount,
 				}).Info("Network recovery detected - persistent high pending block count")
 				networkRecovered = true
@@ -197,13 +197,13 @@ func (ce *Engine) monitorNetworkRecovery() {
 		} else {
 			consecutiveHighPendingCount = 0
 		}
-		
+
 		// Trigger consensus reconciliation if network recovery detected
 		if networkRecovered {
 			log.Info("Triggering consensus reconciliation after network recovery")
 			go ce.performConsensusReconciliation()
 		}
-		
+
 		lastPeerCount = currentPeerCount
 	}
 }
