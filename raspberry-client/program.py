@@ -1,16 +1,16 @@
-import hashlib
-import os
-import sys
+import json
 import logging
 import signal
+import sys
+
+import requests
 from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QFontDatabase
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QScrollArea, QGridLayout, QGraphicsOpacityEffect, \
-    QHBoxLayout
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QScrollArea, QGridLayout, QHBoxLayout
 
+import gpio_controller
 from ui_components import UIComponentFactory
 from weather_data import WeatherDataManager
-import resources_rc
 
 # Constants
 SCREEN_WIDTH = 540
@@ -44,20 +44,18 @@ def setup_signal_handling():
 
 
 class GUI(QWidget):
-    def __init__(self, project_dir):
+    def __init__(self, project_dir, api_base_url="http://localhost:8080"):
         super().__init__()
         self.logger = logging.getLogger(__name__)
-        # TODO: init gpio
-        self.gpio = None
+        self.gpio = gpio_controller.GPIOController()
 
         self.project_dir = project_dir
-        self.data_path = os.path.join(project_dir, 'WeatherData.txt')
+        self.api_base_url = api_base_url
 
         self.data_manager = WeatherDataManager()
         self.ui_factory = UIComponentFactory()
 
         # State tracking
-        self.last_md5 = ''
         self.winner_id = None
         self.winner_icons = []
         self.current_weather_data = []
@@ -72,12 +70,11 @@ class GUI(QWidget):
 
         # Start operations
         self._refresh_data()
-        self._start_data_refresh(1000)
+        self._start_data_refresh_timer(1000)
 
         self.logger.info("Weather Display initialization complete")
 
         self.ui_factory = UIComponentFactory()
-        self.data_manager = WeatherDataManager()
         self.main_layout = QVBoxLayout()
         self.central_widget = QWidget()
 
@@ -101,8 +98,7 @@ class GUI(QWidget):
 
         # Past weather scroll area
         self.past_weather_scroll = QScrollArea(self)
-        # TODO: test code, change to ScrollBarAlwaysOff later
-        self.past_weather_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self.past_weather_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.past_weather_scroll.setFixedSize(SCREEN_WIDTH, SCREEN_HEIGHT)
 
         # Arrange all components
@@ -209,30 +205,43 @@ class GUI(QWidget):
         self.showFullScreen()
         self.setCursor(Qt.BlankCursor)
 
-    def _refresh_data(self):
-        """Refresh weather data from a file"""
+    def _refresh_data(self, block_count = 5):
+        """Refresh weather data from blockchain API"""
         try:
-            # Check if the file has changed
-            current_md5 = get_file_md5(self.data_path)
-            if current_md5 == self.last_md5:
-                self.logger.debug("Data file unchanged, skipping refresh")
+            self.logger.info("Fetching latest weather data from blockchain API")
+            
+            # Call /api/blockchain/latest/5 to get the latest 5 weather records
+            api_url = f"{self.api_base_url}/api/blockchain/latest/{block_count}"
+            
+            try:
+                response = requests.get(api_url, timeout=10)
+                response.raise_for_status()
+                api_data = response.json()
+                self.logger.info(f"Successfully fetched data from API: {len(api_data)} nodes")
+            except requests.exceptions.RequestException as e:
+                self.logger.error(f"HTTP request failed: {e}")
+                return
+            except json.JSONDecodeError as e:
+                self.logger.error(f"Failed to parse API response JSON: {e}")
+                return
+            
+            # Extract weather data from the API response
+            weather_blocks = self._extract_weather_blocks(api_data)
+            if not weather_blocks:
+                self.logger.warning("No weather data found in API response")
                 return
 
-            self.logger.info(f"Data file changed, refreshing (MD5: {current_md5})")
-            self.last_md5 = current_md5
-
-            # Load and parse data
-            json_dicts = read_json_lines(self.data_path)
-            if not json_dicts:
-                self.logger.warning("No data found in weather data file")
-                return
-
-            # Process current weather
-            current_entry = json_dicts[-1]
-            self._update_current_weather(current_entry)
-
-            # Process past weather
-            self._update_past_weather(json_dicts[:-1])
+            self.logger.info(f"Extracted {len(weather_blocks)} weather blocks")
+            
+            # Use latest block for current weather (index 0 is latest)
+            if weather_blocks:
+                self._update_current_weather(weather_blocks[0])
+                
+                # Use blocks 1-4 for history weather (2-5th latest)
+                if len(weather_blocks) > 1:
+                    self._update_history_weather(weather_blocks[1:])
+                else:
+                    self._update_history_weather([])
 
             # Apply styling and activate GPIO
             if self.winner_id and self.gpio:
@@ -240,6 +249,47 @@ class GUI(QWidget):
 
         except Exception as e:
             self.logger.error(f"Error refreshing data: {e}", exc_info=True)
+
+    def _extract_weather_blocks(self, api_data):
+        """Extract weather blocks from blockchain API response"""
+        weather_blocks = []
+        
+        try:
+            # Get the first available node's data
+            if not api_data:
+                self.logger.warning("Empty API response")
+                return weather_blocks
+                
+            # Find first node with blocks data
+            node_data = None
+            for node_id, node_info in api_data.items():
+                if isinstance(node_info, dict) and 'blocks' in node_info:
+                    node_data = node_info['blocks']
+                    self.logger.info(f"Using blocks from node: {node_id}")
+                    break
+            
+            if not node_data:
+                self.logger.warning("No blocks data found in any node")
+                return weather_blocks
+            
+            # Extract weather data from blocks (blocks are already sorted latest first)
+            for block in node_data:
+                if isinstance(block, dict) and 'WeatherData' in block:
+                    weather_data = block['WeatherData']
+                    if weather_data:  # Only add blocks with weather data
+                        # Convert to the expected format
+                        weather_entry = {
+                            'time': block.get('Timestamp', 0),
+                            'data': weather_data
+                        }
+                        weather_blocks.append(weather_entry)
+                        
+            self.logger.info(f"Successfully extracted {len(weather_blocks)} weather blocks")
+            return weather_blocks
+            
+        except Exception as e:
+            self.logger.error(f"Error extracting weather blocks: {e}")
+            return weather_blocks
 
     def _update_current_weather(self, current_entry):
         """Update the current weather display"""
@@ -313,7 +363,7 @@ class GUI(QWidget):
         wind_widget.setFixedSize(174, 65)
         layout.addWidget(wind_widget, 6, 0)
 
-    def _update_past_weather(self, past_entries):
+    def _update_history_weather(self, past_entries):
         """Update past weather display"""
         self.logger.info(f"Updating past weather display with {len(past_entries)} entries")
 
@@ -339,9 +389,6 @@ class GUI(QWidget):
         for i, weather in enumerate(past_weather_list):
             widget = self.ui_factory.create_past_weather_widget(weather, None)
             layout.addWidget(widget, i, 0)
-            # create 4 items at most
-            if i > 3:
-                break
 
         panel = QWidget()
         panel.setObjectName('PastWeatherPanel')
@@ -349,7 +396,7 @@ class GUI(QWidget):
 
         self.past_weather_scroll.setWidget(panel)
 
-    def _start_data_refresh(self, interval):
+    def _start_data_refresh_timer(self, interval):
         """Start automatic data refresh"""
         self.logger.info(f"Starting data refresh timer with interval {interval}ms")
 
@@ -364,36 +411,6 @@ class GUI(QWidget):
         if self.gpio:
             self.gpio.cleanup()
         event.accept()
-
-def read_json_lines(path):
-    """Read JSON lines from a file"""
-    logger = logging.getLogger(__name__)
-    json_dicts = []
-    try:
-        with open(path, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(f, 1):
-                try:
-                    json_dicts.append(eval(line))
-                except Exception as e:
-                    logger.error(f"Error parsing JSON at line {line_num}: {e}")
-                    raise
-        logger.info(f"Successfully read {len(json_dicts)} JSON entries from {path}")
-        return json_dicts
-    except Exception as e:
-        logger.error(f"Error reading JSON file {path}: {e}")
-        raise
-
-def get_file_md5(path):
-    """Calculate file MD5 hash"""
-    logger = logging.getLogger(__name__)
-    try:
-        with open(path, 'rb') as f:
-            md5_hash = hashlib.md5(f.read()).hexdigest()
-        logger.debug(f"MD5 hash for {path}: {md5_hash}")
-        return md5_hash
-    except Exception as e:
-        logger.error(f"Error calculating MD5 for {path}: {e}")
-        raise
 
 def load_fonts():
     """Load custom fonts from QRC resources"""
@@ -435,18 +452,6 @@ def load_stylesheet(app, stylesheet_path):
         logger.error(f"Permission denied accessing stylesheet: {stylesheet_path}")
     except Exception as e:
         logger.error(f"Error loading stylesheet: {e}")
-
-def read_file(path, mode='r'):
-    """Read file content"""
-    logger = logging.getLogger(__name__)
-    try:
-        with open(path, mode, encoding='utf-8') as f:
-            content = f.read()
-        logger.debug(f"Successfully read file: {path}")
-        return content
-    except Exception as e:
-        logger.error(f"Error reading file {path}: {e}")
-        raise
 
 if __name__ == '__main__':
     application = QApplication(sys.argv)
