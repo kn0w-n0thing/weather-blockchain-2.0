@@ -122,6 +122,11 @@ func loadConfig(ctx *cli.Context) *Config {
 func runApp(ctx *cli.Context) error {
 	config := loadConfig(ctx)
 
+	// Initialize centralized logging system first
+	if err := logger.InitializeLogger("logs"); err != nil {
+		return fmt.Errorf("failed to initialize logger: %v", err)
+	}
+
 	// Handle PEM-only creation early
 	if config.OnlyCreatePem {
 		return createPemOnly()

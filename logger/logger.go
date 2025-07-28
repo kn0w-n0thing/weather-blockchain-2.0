@@ -315,37 +315,47 @@ func GetLogStats() (map[string]int, error) {
 	return stats, nil
 }
 
-func init() {
-	// Enable caller reporting for file/line info
-	Logger.SetReportCaller(true)
-
-	// Initialize database hook for all logs
-	var err error
-	dbHook, err = NewDatabaseHook("logs/logs.db")
-	if err != nil {
-		fmt.Printf("Failed to initialize database logging: %v\n", err)
-	} else {
-		Logger.AddHook(dbHook)
+// InitializeLogger sets up the logger with proper paths for database and file logging
+func InitializeLogger(logsDir string) error {
+	// Ensure the logs directory exists
+	if err := os.MkdirAll(logsDir, 0755); err != nil {
+		return fmt.Errorf("failed to create logs directory: %v", err)
 	}
 
-	// Create console filter for important messages only
-	consoleFilter := NewConsoleFilter(os.Stdout)
+	// Initialize database hook
+	dbPath := path.Join(logsDir, "logs.db")
+	var err error
+	dbHook, err = NewDatabaseHook(dbPath)
+	if err != nil {
+		return fmt.Errorf("failed to initialize database logging: %v", err)
+	}
+	Logger.AddHook(dbHook)
 
-	// File rotation setup (keep for backup)
+	// File rotation setup
+	logFile := path.Join(logsDir, "app.log")
 	fileWriter := &lumberjack.Logger{
-		Filename:   "logs/app.log",
-		MaxSize:    100, // Reduced size since most logs go to DB
+		Filename:   logFile,
+		MaxSize:    100, // MB
 		MaxBackups: 2,
 		MaxAge:     30, // days
 		Compress:   true,
 	}
 
-	// Set output to filtered console and backup file
-	Logger.Out = io.MultiWriter(consoleFilter, fileWriter)
+	// Set output to console and file
+	Logger.Out = io.MultiWriter(NewConsoleFilter(os.Stdout), fileWriter)
 
-	// Use custom log4j-like formatter
+	Logger.Info("Centralized logging system initialized successfully")
+	Logger.WithFields(Fields{
+		"dbPath":  dbPath,
+		"logFile": logFile,
+	}).Info("Logger paths configured")
+
+	return nil
+}
+
+func init() {
+	// Basic initialization - full setup happens in InitializeLogger
+	Logger.SetReportCaller(true)
 	Logger.SetFormatter(&Log4jFormatter{})
-
 	Logger.SetLevel(logrus.DebugLevel)
-	Logger.Info("Dual logging system initialized successfully")
 }
