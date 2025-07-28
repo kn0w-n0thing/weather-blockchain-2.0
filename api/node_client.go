@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 	"weather-blockchain/block"
+	"weather-blockchain/protocol"
 )
 
 // NodeClient handles communication with blockchain nodes
@@ -20,52 +21,10 @@ type NodeClient struct {
 	domain          string
 }
 
-// MessageType represents network message types
-type MessageType int
-
-const (
-	MessageTypeBlock MessageType = iota
-	MessageTypeBlockRequest
-	MessageTypeBlockResponse
-	MessageTypeBlockRangeRequest
-	MessageTypeBlockRangeResponse
-	MessageTypeHeightRequest
-	MessageTypeHeightResponse
-)
-
-// Message represents a network message
-type Message struct {
-	Type    MessageType     `json:"type"`
-	Payload json.RawMessage `json:"payload"`
-}
-
-// BlockRequestMessage is used to request blockchain data
-type BlockRequestMessage struct {
-	Index uint64 `json:"index"`
-}
-
-// BlockResponseMessage is the response to a block request
-type BlockResponseMessage struct {
-	Block *block.Block `json:"block"`
-}
-
 // BlockchainRequestMessage requests full blockchain info
 type BlockchainRequestMessage struct {
 	RequestType string `json:"request_type"` // "info", "full_chain", "latest_blocks"
 	Count       int    `json:"count,omitempty"`
-}
-
-// HeightRequestMessage is used to request blockchain height information
-type HeightRequestMessage struct {
-	// Empty for now, could add filters in the future
-}
-
-// HeightResponseMessage is the response to a height request
-type HeightResponseMessage struct {
-	BlockCount   int    `json:"block_count"`
-	LatestIndex  uint64 `json:"latest_index"`
-	LatestHash   string `json:"latest_hash"`
-	GenesisHash  string `json:"genesis_hash"`
 }
 
 // NewNodeClient creates a new node client for API communication
@@ -222,15 +181,15 @@ func (nc *NodeClient) RequestBlockchainInfo(nodeID string) (*BlockchainInfo, err
 	defer conn.Close()
 
 	// Use the new height request message
-	heightReq := HeightRequestMessage{}
+	heightReq := protocol.HeightRequestMessage{}
 
 	reqData, err := json.Marshal(heightReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal height request: %w", err)
 	}
 
-	msg := Message{
-		Type:    MessageTypeHeightRequest,
+	msg := protocol.Message{
+		Type:    protocol.MessageTypeHeightRequest,
 		Payload: reqData,
 	}
 
@@ -251,19 +210,19 @@ func (nc *NodeClient) RequestBlockchainInfo(nodeID string) (*BlockchainInfo, err
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	decoder := json.NewDecoder(conn)
 
-	var response Message
+	var response protocol.Message
 	err = decoder.Decode(&response)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response from node %s: %w", nodeID, err)
 	}
 
-	if response.Type != MessageTypeHeightResponse {
+	if response.Type != protocol.MessageTypeHeightResponse {
 		return nil, fmt.Errorf("unexpected response type %d from node %s, expected height response", response.Type, nodeID)
 	}
 
 	log.WithField("nodeID", nodeID).Debug("Received height response from node")
 
-	var heightResp HeightResponseMessage
+	var heightResp protocol.HeightResponseMessage
 	err = json.Unmarshal(response.Payload, &heightResp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal height response: %w", err)
@@ -323,7 +282,7 @@ func (nc *NodeClient) RequestBlock(nodeID string, blockIndex uint64) (*block.Blo
 	defer conn.Close()
 
 	// Create block request
-	blockReq := BlockRequestMessage{
+	blockReq := protocol.BlockRequestMessage{
 		Index: blockIndex,
 	}
 
@@ -332,8 +291,8 @@ func (nc *NodeClient) RequestBlock(nodeID string, blockIndex uint64) (*block.Blo
 		return nil, fmt.Errorf("failed to marshal block request: %w", err)
 	}
 
-	msg := Message{
-		Type:    MessageTypeBlockRequest,
+	msg := protocol.Message{
+		Type:    protocol.MessageTypeBlockRequest,
 		Payload: reqData,
 	}
 
@@ -352,17 +311,17 @@ func (nc *NodeClient) RequestBlock(nodeID string, blockIndex uint64) (*block.Blo
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	decoder := json.NewDecoder(conn)
 
-	var response Message
+	var response protocol.Message
 	err = decoder.Decode(&response)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response from node %s: %w", nodeID, err)
 	}
 
-	if response.Type != MessageTypeBlockResponse {
+	if response.Type != protocol.MessageTypeBlockResponse {
 		return nil, fmt.Errorf("unexpected response type from node %s", nodeID)
 	}
 
-	var blockResp BlockResponseMessage
+	var blockResp protocol.BlockResponseMessage
 	err = json.Unmarshal(response.Payload, &blockResp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to unmarshal block response: %w", err)

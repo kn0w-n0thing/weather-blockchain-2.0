@@ -11,6 +11,7 @@ import (
 	"time"
 	"weather-blockchain/block"
 	"weather-blockchain/logger"
+	"weather-blockchain/protocol"
 )
 
 var log = logger.Logger
@@ -35,65 +36,6 @@ type Manager interface {
 	SyncWithPeers(blockchain interface{}) error
 }
 
-// MessageType Define message types for the network
-type MessageType int
-
-const (
-	MessageTypeBlock MessageType = iota
-	MessageTypeBlockRequest
-	MessageTypeBlockResponse
-	MessageTypeBlockRangeRequest
-	MessageTypeBlockRangeResponse
-	MessageTypeHeightRequest
-	MessageTypeHeightResponse
-)
-
-// Message represents a network message
-type Message struct {
-	Type    MessageType     `json:"type"`
-	Payload json.RawMessage `json:"payload"`
-}
-
-// BlockMessage contains a block to be broadcast
-type BlockMessage struct {
-	Block *block.Block `json:"block"`
-}
-
-// BlockRequestMessage is used to request a specific block
-type BlockRequestMessage struct {
-	Index uint64 `json:"index"`
-}
-
-// BlockRangeRequestMessage is used to request a range of blocks
-type BlockRangeRequestMessage struct {
-	StartIndex uint64 `json:"start_index"`
-	EndIndex   uint64 `json:"end_index"`
-}
-
-// BlockResponseMessage is the response to a block request
-type BlockResponseMessage struct {
-	Block *block.Block `json:"block"`
-}
-
-// BlockRangeResponseMessage is the response to a block range request
-type BlockRangeResponseMessage struct {
-	StartIndex uint64         `json:"start_index"`
-	EndIndex   uint64         `json:"end_index"`
-	Blocks     []*block.Block `json:"blocks"`
-}
-
-// HeightRequestMessage is used to request blockchain height information
-type HeightRequestMessage struct {
-	// Empty for now, could add filters in the future
-}
-
-// HeightResponseMessage is the response to a height request
-type HeightResponseMessage struct {
-	BlockCount   int    `json:"block_count"`
-	LatestIndex  uint64 `json:"latest_index"`
-	LatestHash   string `json:"latest_hash"`
-	GenesisHash  string `json:"genesis_hash"`
-}
 
 const TcpNetwork = "tcp"
 
@@ -739,7 +681,7 @@ func (node *Node) sendBlockRequestToPeer(peerAddr string, blockIndex uint64) err
 	defer conn.Close()
 
 	// Create block request message
-	blockReq := BlockRequestMessage{
+	blockReq := protocol.BlockRequestMessage{
 		Index: blockIndex,
 	}
 
@@ -748,8 +690,8 @@ func (node *Node) sendBlockRequestToPeer(peerAddr string, blockIndex uint64) err
 		return fmt.Errorf("failed to marshal block request: %v", err)
 	}
 
-	requestMsg := Message{
-		Type:    MessageTypeBlockRequest,
+	requestMsg := protocol.Message{
+		Type:    protocol.MessageTypeBlockRequest,
 		Payload: requestPayload,
 	}
 
@@ -781,7 +723,7 @@ func (node *Node) sendBlockRangeRequestToPeer(peerAddr string, startIndex, endIn
 	defer conn.Close()
 
 	// Create block range request message
-	blockRangeReq := BlockRangeRequestMessage{
+	blockRangeReq := protocol.BlockRangeRequestMessage{
 		StartIndex: startIndex,
 		EndIndex:   endIndex,
 	}
@@ -791,8 +733,8 @@ func (node *Node) sendBlockRangeRequestToPeer(peerAddr string, startIndex, endIn
 		return fmt.Errorf("failed to marshal block range request: %v", err)
 	}
 
-	requestMsg := Message{
-		Type:    MessageTypeBlockRangeRequest,
+	requestMsg := protocol.Message{
+		Type:    protocol.MessageTypeBlockRangeRequest,
 		Payload: requestPayload,
 	}
 
@@ -856,7 +798,7 @@ func (node *Node) broadcastToAllPeers(blk *block.Block) {
 	}).Debug("broadcastToAllPeers: Broadcasting block to all peers")
 
 	// Marshal the block
-	blockMsg := BlockMessage{
+	blockMsg := protocol.BlockMessage{
 		Block: blk,
 	}
 	blockData, err := json.Marshal(blockMsg)
@@ -870,8 +812,8 @@ func (node *Node) broadcastToAllPeers(blk *block.Block) {
 	log.WithField("dataSize", len(blockData)).Debug("broadcastToAllPeers: Block marshalled successfully")
 
 	// Create a message
-	msg := Message{
-		Type:    MessageTypeBlock,
+	msg := protocol.Message{
+		Type:    protocol.MessageTypeBlock,
 		Payload: blockData,
 	}
 	log.WithField("messageType", msg.Type).Debug("broadcastToAllPeers: Created block message")
@@ -985,7 +927,7 @@ func (node *Node) handleConnection(conn net.Conn) {
 
 	// Read messages
 	for {
-		var msg Message
+		var msg protocol.Message
 		log.WithField("remoteAddr", remoteAddr).Debug("handleConnection: Waiting for next message")
 
 		if err := decoder.Decode(&msg); err != nil {
@@ -1008,12 +950,12 @@ func (node *Node) handleConnection(conn net.Conn) {
 
 		// Process based on message type
 		switch msg.Type {
-		case MessageTypeBlock:
+		case protocol.MessageTypeBlock:
 			log.WithField("messageType", "Block").Debug("handleConnection: Processing block message")
 
 			fmt.Printf("Raw message: %s\n", msg.Payload)
 			// Parse the block
-			var blockMsg BlockMessage
+			var blockMsg protocol.BlockMessage
 			if err := json.Unmarshal(msg.Payload, &blockMsg); err != nil {
 				log.WithFields(logger.Fields{
 					"error":       err,
@@ -1045,11 +987,11 @@ func (node *Node) handleConnection(conn net.Conn) {
 				}).Warn("handleConnection: Incoming block channel full, dropped block")
 			}
 
-		case MessageTypeBlockRequest:
+		case protocol.MessageTypeBlockRequest:
 			log.WithField("messageType", "BlockRequest").Debug("handleConnection: Processing block request")
 
 			// Parse the block request
-			var blockReq BlockRequestMessage
+			var blockReq protocol.BlockRequestMessage
 			if err := json.Unmarshal(msg.Payload, &blockReq); err != nil {
 				log.WithFields(logger.Fields{
 					"error":       err,
@@ -1065,36 +1007,36 @@ func (node *Node) handleConnection(conn net.Conn) {
 				requestedBlock := node.blockProvider.GetBlockByIndex(blockReq.Index)
 
 				// Create response message
-				var responseMsg Message
+				var responseMsg protocol.Message
 				if requestedBlock != nil {
 					log.WithFields(logger.Fields{
 						"requestedIndex": blockReq.Index,
 						"blockHash":      requestedBlock.Hash,
 					}).Debug("handleConnection: Found requested block, sending response")
 
-					blockResponse := BlockResponseMessage{Block: requestedBlock}
+					blockResponse := protocol.BlockResponseMessage{Block: requestedBlock}
 					responsePayload, err := json.Marshal(blockResponse)
 					if err != nil {
 						log.WithError(err).Error("handleConnection: Failed to marshal block response")
 						continue
 					}
 
-					responseMsg = Message{
-						Type:    MessageTypeBlockResponse,
+					responseMsg = protocol.Message{
+						Type:    protocol.MessageTypeBlockResponse,
 						Payload: responsePayload,
 					}
 				} else {
 					log.WithField("requestedIndex", blockReq.Index).Debug("handleConnection: Requested block not found, sending empty response")
 
-					blockResponse := BlockResponseMessage{Block: nil}
+					blockResponse := protocol.BlockResponseMessage{Block: nil}
 					responsePayload, err := json.Marshal(blockResponse)
 					if err != nil {
 						log.WithError(err).Error("handleConnection: Failed to marshal empty block response")
 						continue
 					}
 
-					responseMsg = Message{
-						Type:    MessageTypeBlockResponse,
+					responseMsg = protocol.Message{
+						Type:    protocol.MessageTypeBlockResponse,
 						Payload: responsePayload,
 					}
 				}
@@ -1117,11 +1059,11 @@ func (node *Node) handleConnection(conn net.Conn) {
 				log.Warn("handleConnection: No block provider available to handle block request")
 			}
 
-		case MessageTypeBlockResponse:
+		case protocol.MessageTypeBlockResponse:
 			log.WithField("messageType", "BlockResponse").Debug("handleConnection: Processing block response")
 
 			// Parse the block response
-			var blockResp BlockResponseMessage
+			var blockResp protocol.BlockResponseMessage
 			if err := json.Unmarshal(msg.Payload, &blockResp); err != nil {
 				log.WithFields(logger.Fields{
 					"error":       err,
@@ -1153,10 +1095,10 @@ func (node *Node) handleConnection(conn net.Conn) {
 				log.Debug("handleConnection: Received empty block response (block not found)")
 			}
 
-		case MessageTypeBlockRangeRequest:
+		case protocol.MessageTypeBlockRangeRequest:
 			log.Debug("handleConnection: Processing block range request message")
 
-			var blockRangeReq BlockRangeRequestMessage
+			var blockRangeReq protocol.BlockRangeRequestMessage
 			if err := json.Unmarshal(msg.Payload, &blockRangeReq); err != nil {
 				log.WithError(err).Error("handleConnection: Failed to unmarshal block range request")
 				continue
@@ -1179,7 +1121,7 @@ func (node *Node) handleConnection(conn net.Conn) {
 			}
 
 			// Create range response message with all blocks
-			blockRangeResp := BlockRangeResponseMessage{
+			blockRangeResp := protocol.BlockRangeResponseMessage{
 				StartIndex: blockRangeReq.StartIndex,
 				EndIndex:   blockRangeReq.EndIndex,
 				Blocks:     blocks,
@@ -1191,8 +1133,8 @@ func (node *Node) handleConnection(conn net.Conn) {
 				continue
 			}
 
-			respMsg := Message{
-				Type:    MessageTypeBlockRangeResponse,
+			respMsg := protocol.Message{
+				Type:    protocol.MessageTypeBlockRangeResponse,
 				Payload: respPayload,
 			}
 
@@ -1227,10 +1169,10 @@ func (node *Node) handleConnection(conn net.Conn) {
 				"foundBlocks": foundCount,
 			}).Info("handleConnection: Sent block range response")
 
-		case MessageTypeBlockRangeResponse:
+		case protocol.MessageTypeBlockRangeResponse:
 			log.Debug("handleConnection: Processing block range response message")
 
-			var blockRangeResp BlockRangeResponseMessage
+			var blockRangeResp protocol.BlockRangeResponseMessage
 			if err := json.Unmarshal(msg.Payload, &blockRangeResp); err != nil {
 				log.WithError(err).Error("handleConnection: Failed to unmarshal block range response")
 				continue
@@ -1283,10 +1225,10 @@ func (node *Node) handleConnection(conn net.Conn) {
 				"successfullyQueued": successfullyQueued,
 			}).Info("handleConnection: Processed block range response")
 
-		case MessageTypeHeightRequest:
+		case protocol.MessageTypeHeightRequest:
 			log.Debug("handleConnection: Processing height request message")
 
-			var heightReq HeightRequestMessage
+			var heightReq protocol.HeightRequestMessage
 			if err := json.Unmarshal(msg.Payload, &heightReq); err != nil {
 				log.WithError(err).Error("handleConnection: Failed to unmarshal height request")
 				continue
@@ -1295,7 +1237,7 @@ func (node *Node) handleConnection(conn net.Conn) {
 			log.Info("handleConnection: Received blockchain height request")
 
 			// Get blockchain height information
-			var heightResp HeightResponseMessage
+			var heightResp protocol.HeightResponseMessage
 			if node.blockProvider != nil {
 				blockCount := node.blockProvider.GetBlockCount()
 				latestBlock := node.blockProvider.GetLatestBlock()
@@ -1331,8 +1273,8 @@ func (node *Node) handleConnection(conn net.Conn) {
 				continue
 			}
 
-			respMsg := Message{
-				Type:    MessageTypeHeightResponse,
+			respMsg := protocol.Message{
+				Type:    protocol.MessageTypeHeightResponse,
 				Payload: respPayload,
 			}
 
@@ -1353,10 +1295,10 @@ func (node *Node) handleConnection(conn net.Conn) {
 				"latestIndex": heightResp.LatestIndex,
 			}).Info("handleConnection: Sent height response")
 
-		case MessageTypeHeightResponse:
+		case protocol.MessageTypeHeightResponse:
 			log.Debug("handleConnection: Processing height response message")
 
-			var heightResp HeightResponseMessage
+			var heightResp protocol.HeightResponseMessage
 			if err := json.Unmarshal(msg.Payload, &heightResp); err != nil {
 				log.WithError(err).Error("handleConnection: Failed to unmarshal height response")
 				continue
@@ -1502,7 +1444,7 @@ func (node *Node) RequestBlockchainFromPeer(blockchain *block.Blockchain, peerAd
 
 	for consecutiveNotFound := 0; consecutiveNotFound < maxConsecutiveNotFound; {
 		// Send request for current block
-		blockReq := BlockRequestMessage{
+		blockReq := protocol.BlockRequestMessage{
 			Index: blockIndex,
 		}
 
@@ -1512,8 +1454,8 @@ func (node *Node) RequestBlockchainFromPeer(blockchain *block.Blockchain, peerAd
 			break
 		}
 
-		requestMsg := Message{
-			Type:    MessageTypeBlockRequest,
+		requestMsg := protocol.Message{
+			Type:    protocol.MessageTypeBlockRequest,
 			Payload: requestPayload,
 		}
 
@@ -1541,7 +1483,7 @@ func (node *Node) RequestBlockchainFromPeer(blockchain *block.Blockchain, peerAd
 		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		decoder := json.NewDecoder(conn)
 
-		var responseMsg Message
+		var responseMsg protocol.Message
 		if err := decoder.Decode(&responseMsg); err != nil {
 			log.WithFields(logger.Fields{
 				"blockIndex": blockIndex,
@@ -1550,13 +1492,13 @@ func (node *Node) RequestBlockchainFromPeer(blockchain *block.Blockchain, peerAd
 			break
 		}
 
-		if responseMsg.Type != MessageTypeBlockResponse {
+		if responseMsg.Type != protocol.MessageTypeBlockResponse {
 			log.WithField("messageType", responseMsg.Type).Warn("Received unexpected message type")
 			continue
 		}
 
 		// Parse the block response
-		var blockResp BlockResponseMessage
+		var blockResp protocol.BlockResponseMessage
 		if err := json.Unmarshal(responseMsg.Payload, &blockResp); err != nil {
 			log.WithError(err).Error("Failed to unmarshal block response")
 			break
