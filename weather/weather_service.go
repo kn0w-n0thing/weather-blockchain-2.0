@@ -76,7 +76,7 @@ func NewWeatherService() (*Service, error) {
 
 // initDatabase initializes the SQLite database
 func initDatabase() (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", "./weather.db")
+	db, err := sql.Open("sqlite3", "./data/weather.db")
 	if err != nil {
 		return nil, err
 	}
@@ -95,7 +95,7 @@ func initDatabase() (*sql.DB, error) {
 		wind_direction INTEGER NOT NULL,
 		humidity INTEGER NOT NULL,
 		timestamp INTEGER NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 	`
 
@@ -179,7 +179,7 @@ func getNextScheduledTime() time.Time {
 	// Create next scheduled time
 	nextTime := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), nextMinute, 0, 0, now.Location())
 
-	// If we're scheduling for minute 0 and it's past 30 minutes, move to next hour
+	// If we're scheduling for minute 0, and it's past 30 minutes, move to next hour
 	if nextMinute == 0 {
 		nextTime = nextTime.Add(time.Hour)
 	}

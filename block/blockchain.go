@@ -139,7 +139,7 @@ func (blockchain *Blockchain) createTables() error {
 		validator_public_key BLOB,
 		parent_hash TEXT,
 		is_main_chain BOOLEAN DEFAULT FALSE,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (parent_hash) REFERENCES blocks(hash)
 	);`
 
