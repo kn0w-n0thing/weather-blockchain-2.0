@@ -53,7 +53,7 @@ func runAPIServer(c *cli.Context) error {
 	level, err := logrus.ParseLevel(logLevel)
 	if err != nil {
 		log.WithError(err).Warn("Invalid log level, using info")
-		level = logrus.InfoLevel
+		level = logrus.DebugLevel
 	}
 	log.SetLevel(level)
 
