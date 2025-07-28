@@ -321,7 +321,7 @@ func init() {
 
 	// Initialize database hook for all logs
 	var err error
-	dbHook, err = NewDatabaseHook("logs/app.db")
+	dbHook, err = NewDatabaseHook("logs/logs.db")
 	if err != nil {
 		fmt.Printf("Failed to initialize database logging: %v\n", err)
 	} else {
