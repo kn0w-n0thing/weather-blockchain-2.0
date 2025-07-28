@@ -46,9 +46,20 @@ func (s *Server) Start() error {
 	log.WithField("port", s.port).Info("Starting blockchain API server")
 
 	// Discover nodes on startup
+	log.Info("Attempting initial node discovery on server startup")
 	err := s.nodeClient.DiscoverNodes()
 	if err != nil {
 		log.WithError(err).Warn("Initial node discovery failed, but server will start anyway")
+	} else {
+		discoveredNodes := s.nodeClient.GetDiscoveredNodes()
+		log.WithField("discoveredCount", len(discoveredNodes)).Info("Initial node discovery completed successfully")
+		for _, node := range discoveredNodes {
+			log.WithFields(logrus.Fields{
+				"nodeID":  node.NodeID,
+				"address": node.Address,
+				"port":    node.Port,
+			}).Debug("Discovered blockchain node")
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -69,16 +80,34 @@ func (s *Server) Start() error {
 		Handler: s.corsMiddleware(s.loggingMiddleware(mux)),
 	}
 
-	log.WithField("port", s.port).Info("Blockchain API server started successfully")
-	return s.httpServer.ListenAndServe()
+	log.WithFields(logrus.Fields{
+		"port":           s.port,
+		"address":        s.httpServer.Addr,
+		"discoveredNodes": len(s.nodeClient.GetDiscoveredNodes()),
+	}).Info("Blockchain API server configured and ready to start")
+
+	log.Info("Starting HTTP server listener...")
+	err = s.httpServer.ListenAndServe()
+	if err != nil {
+		log.WithError(err).Error("HTTP server failed to start or stopped with error")
+	}
+	return err
 }
 
 // Stop stops the API server
 func (s *Server) Stop() error {
 	log.Info("Stopping blockchain API server")
 	if s.httpServer != nil {
-		return s.httpServer.Close()
+		log.WithField("address", s.httpServer.Addr).Info("Closing HTTP server")
+		err := s.httpServer.Close()
+		if err != nil {
+			log.WithError(err).Error("Error occurred while stopping HTTP server")
+		} else {
+			log.Info("HTTP server stopped successfully")
+		}
+		return err
 	}
+	log.Warn("HTTP server was already nil, nothing to stop")
 	return nil
 }
 
@@ -183,7 +212,18 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleGetDiscoveredNodes handles requests to get discovered nodes
 func (s *Server) handleGetDiscoveredNodes(w http.ResponseWriter, r *http.Request) {
+	log.Debug("API: Handling get discovered nodes request")
 	nodes := s.nodeClient.GetDiscoveredNodes()
+
+	log.WithField("nodeCount", len(nodes)).Info("Retrieved discovered blockchain nodes")
+	for _, node := range nodes {
+		log.WithFields(logrus.Fields{
+			"nodeID":   node.NodeID,
+			"address":  node.Address,
+			"port":     node.Port,
+			"lastSeen": node.LastSeen,
+		}).Debug("Node details")
+	}
 
 	responseData := map[string]interface{}{
 		"nodes":      nodes,
@@ -197,11 +237,16 @@ func (s *Server) handleGetDiscoveredNodes(w http.ResponseWriter, r *http.Request
 // handleDiscoverNodes handles requests to discover new nodes
 func (s *Server) handleDiscoverNodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
+		log.WithField("method", r.Method).Warn("Invalid method for node discovery endpoint")
 		s.writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
 		return
 	}
 
-	log.Info("Manual node discovery triggered via API")
+	log.WithField("remoteAddr", r.RemoteAddr).Info("Manual node discovery triggered via API")
+
+	// Get current nodes for comparison
+	previousNodes := s.nodeClient.GetDiscoveredNodes()
+	log.WithField("previousNodeCount", len(previousNodes)).Debug("Nodes before discovery")
 
 	err := s.nodeClient.DiscoverNodes()
 	if err != nil {
@@ -211,19 +256,50 @@ func (s *Server) handleDiscoverNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nodes := s.nodeClient.GetDiscoveredNodes()
+	newNodeCount := len(nodes) - len(previousNodes)
+	log.WithFields(logrus.Fields{
+		"totalNodes": len(nodes),
+		"newNodes":   newNodeCount,
+	}).Info("Node discovery completed")
+
+	// Log details of newly discovered nodes
+	if newNodeCount > 0 {
+		for _, node := range nodes {
+			found := false
+			for _, prevNode := range previousNodes {
+				if prevNode.NodeID == node.NodeID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				log.WithFields(logrus.Fields{
+					"nodeID":  node.NodeID,
+					"address": node.Address,
+					"port":    node.Port,
+				}).Info("New blockchain node discovered")
+			}
+		}
+	}
+
 	responseData := map[string]interface{}{
 		"nodes":      nodes,
 		"node_count": len(nodes),
+		"new_nodes":  newNodeCount,
 		"timestamp":  time.Now(),
 	}
 
-	s.writeSuccess(w, responseData, fmt.Sprintf("Discovery completed, found %d nodes", len(nodes)))
+	s.writeSuccess(w, responseData, fmt.Sprintf("Discovery completed, found %d nodes (%d new)", len(nodes), newNodeCount))
 }
 
 // handleBlockchainInfo handles requests to get blockchain information
 func (s *Server) handleBlockchainInfo(w http.ResponseWriter, r *http.Request) {
+	log.Debug("API: Handling blockchain info request")
 	nodes := s.nodeClient.GetDiscoveredNodes()
+	log.WithField("availableNodes", len(nodes)).Debug("Checking available nodes for blockchain info")
+	
 	if len(nodes) == 0 {
+		log.Warn("No blockchain nodes available for info request")
 		s.writeError(w, http.StatusServiceUnavailable, "No blockchain nodes discovered")
 		return
 	}
@@ -231,13 +307,22 @@ func (s *Server) handleBlockchainInfo(w http.ResponseWriter, r *http.Request) {
 	// Get blockchain info from all nodes
 	nodeInfos := make(map[string]interface{})
 	var totalErrors int
+	var successfulRequests int
 
+	log.WithField("nodeCount", len(nodes)).Info("Requesting blockchain info from all discovered nodes")
 	for _, node := range nodes {
+		log.WithFields(logrus.Fields{
+			"nodeID":  node.NodeID,
+			"address": node.Address,
+			"port":    node.Port,
+		}).Debug("Requesting blockchain info from node")
+		
 		info, err := s.nodeClient.RequestBlockchainInfo(node.NodeID)
 		if err != nil {
 			log.WithFields(logrus.Fields{
-				"nodeID": node.NodeID,
-				"error":  err,
+				"nodeID":  node.NodeID,
+				"address": node.Address,
+				"error":   err,
 			}).Warn("Failed to get blockchain info from node")
 			nodeInfos[node.NodeID] = map[string]interface{}{
 				"error":     err.Error(),
@@ -245,21 +330,35 @@ func (s *Server) handleBlockchainInfo(w http.ResponseWriter, r *http.Request) {
 			}
 			totalErrors++
 		} else {
+			log.WithFields(logrus.Fields{
+				"nodeID":      node.NodeID,
+				"totalBlocks": info.TotalBlocks,
+				"latestHash":  info.LatestHash,
+				"chainValid":  info.ChainValid,
+			}).Info("Successfully retrieved blockchain info from node")
 			nodeInfos[node.NodeID] = map[string]interface{}{
 				"blockchain_info": info,
 				"node_info":       node,
 			}
+			successfulRequests++
 		}
 	}
 
+	log.WithFields(logrus.Fields{
+		"totalNodes":         len(nodes),
+		"successfulRequests": successfulRequests,
+		"errors":             totalErrors,
+	}).Info("Blockchain info request completed")
+
 	responseData := map[string]interface{}{
-		"nodes":       nodeInfos,
-		"total_nodes": len(nodes),
-		"errors":      totalErrors,
-		"timestamp":   time.Now(),
+		"nodes":              nodeInfos,
+		"total_nodes":        len(nodes),
+		"successful_requests": successfulRequests,
+		"errors":             totalErrors,
+		"timestamp":          time.Now(),
 	}
 
-	message := fmt.Sprintf("Retrieved blockchain info from %d nodes (%d errors)", len(nodes), totalErrors)
+	message := fmt.Sprintf("Retrieved blockchain info from %d/%d nodes (%d errors)", successfulRequests, len(nodes), totalErrors)
 	s.writeSuccess(w, responseData, message)
 }
 
@@ -388,16 +487,19 @@ func (s *Server) handleCompareNodes(w http.ResponseWriter, r *http.Request) {
 
 // handleBlockchainHeight gets the height of the blockchain from discovered nodes
 func (s *Server) handleBlockchainHeight(w http.ResponseWriter, r *http.Request) {
-	log.Debug("API: Handling blockchain height request")
+	log.WithField("remoteAddr", r.RemoteAddr).Debug("API: Handling blockchain height request")
 
 	if r.Method != http.MethodGet {
+		log.WithField("method", r.Method).Warn("Invalid method for blockchain height endpoint")
 		s.writeError(w, http.StatusMethodNotAllowed, "Only GET method is allowed")
 		return
 	}
 
 	// Get discovered nodes
 	nodes := s.nodeClient.GetDiscoveredNodes()
+	log.WithField("availableNodes", len(nodes)).Debug("Available nodes for height request")
 	if len(nodes) == 0 {
+		log.Warn("No blockchain nodes available for height request")
 		s.writeError(w, http.StatusServiceUnavailable, "No blockchain nodes discovered")
 		return
 	}
@@ -408,15 +510,21 @@ func (s *Server) handleBlockchainHeight(w http.ResponseWriter, r *http.Request) 
 	heightCounts := make(map[uint64]int)
 
 	// Get blockchain info from each node to determine height
+	log.WithField("nodeCount", len(nodes)).Info("Requesting blockchain height from all nodes")
 	for _, node := range nodes {
 		log.WithFields(logrus.Fields{
 			"nodeID":  node.NodeID,
 			"address": node.Address,
+			"port":    node.Port,
 		}).Debug("Getting blockchain height from node")
 
-		info, err := s.nodeClient.RequestBlockchainInfo(node.Address)
+		info, err := s.nodeClient.RequestBlockchainInfo(node.NodeID)
 		if err != nil {
-			log.WithError(err).WithField("nodeID", node.NodeID).Warn("Failed to get blockchain info from node")
+			log.WithFields(logrus.Fields{
+				"nodeID":  node.NodeID,
+				"address": node.Address,
+				"error":   err,
+			}).Warn("Failed to get blockchain info from node")
 			nodeHeights[node.NodeID] = map[string]interface{}{
 				"height": nil,
 				"error":  err.Error(),
@@ -429,6 +537,13 @@ func (s *Server) handleBlockchainHeight(w http.ResponseWriter, r *http.Request) 
 			height = height - 1 // Convert from count to height (0-indexed)
 		}
 
+		log.WithFields(logrus.Fields{
+			"nodeID":      node.NodeID,
+			"height":      height,
+			"totalBlocks": info.TotalBlocks,
+			"latestHash":  info.LatestHash,
+		}).Info("Retrieved blockchain height from node")
+
 		nodeHeights[node.NodeID] = map[string]interface{}{
 			"height":       height,
 			"total_blocks": info.TotalBlocks,
@@ -439,6 +554,7 @@ func (s *Server) handleBlockchainHeight(w http.ResponseWriter, r *http.Request) 
 		heightCounts[height]++
 		if height > maxHeight {
 			maxHeight = height
+			log.WithField("newMaxHeight", maxHeight).Debug("Updated maximum blockchain height")
 		}
 	}
 
@@ -451,23 +567,34 @@ func (s *Server) handleBlockchainHeight(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	log.WithFields(logrus.Fields{
+		"maxHeight":         maxHeight,
+		"consensusHeight":    consensusHeight,
+		"consensusNodeCount": maxCount,
+		"heightDistribution": heightCounts,
+		"totalNodes":         len(nodes),
+	}).Info("Blockchain height analysis completed")
+
 	responseData := map[string]interface{}{
 		"max_height":          maxHeight,
 		"consensus_height":    consensusHeight,
+		"consensus_node_count": maxCount,
 		"node_heights":        nodeHeights,
 		"height_distribution": heightCounts,
 		"total_nodes":         len(nodes),
 		"timestamp":           time.Now(),
 	}
 
-	s.writeSuccess(w, responseData, "Blockchain height retrieved successfully")
+	message := fmt.Sprintf("Blockchain height retrieved: max=%d, consensus=%d (%d nodes)", maxHeight, consensusHeight, maxCount)
+	s.writeSuccess(w, responseData, message)
 }
 
 // handleLatestBlocks gets the n latest blocks from the blockchain
 func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
-	log.Debug("API: Handling latest blocks request")
+	log.WithField("remoteAddr", r.RemoteAddr).Debug("API: Handling latest blocks request")
 
 	if r.Method != http.MethodGet {
+		log.WithField("method", r.Method).Warn("Invalid method for latest blocks endpoint")
 		s.writeError(w, http.StatusMethodNotAllowed, "Only GET method is allowed")
 		return
 	}
@@ -475,30 +602,43 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 	// Extract n from URL path /api/blockchain/latest/{n}
 	path := strings.TrimPrefix(r.URL.Path, "/api/blockchain/latest/")
 	if path == "" {
+		log.Warn("Missing number of blocks parameter in latest blocks request")
 		s.writeError(w, http.StatusBadRequest, "Missing number of blocks parameter. Use /api/blockchain/latest/{n}")
 		return
 	}
 
 	n, err := strconv.Atoi(path)
 	if err != nil || n <= 0 {
+		log.WithFields(logrus.Fields{
+			"path":  path,
+			"error": err,
+		}).Warn("Invalid number of blocks parameter")
 		s.writeError(w, http.StatusBadRequest, "Invalid number of blocks. Must be a positive integer")
 		return
 	}
 
 	if n > 100 {
+		log.WithField("requestedBlocks", n).Warn("Requested block count exceeds maximum")
 		s.writeError(w, http.StatusBadRequest, "Number of blocks cannot exceed 100")
 		return
 	}
 
+	log.WithField("requestedBlocks", n).Info("Processing latest blocks request")
+
 	// Get discovered nodes
 	nodes := s.nodeClient.GetDiscoveredNodes()
+	log.WithField("availableNodes", len(nodes)).Debug("Available nodes for latest blocks request")
 	if len(nodes) == 0 {
+		log.Warn("No blockchain nodes available for latest blocks request")
 		s.writeError(w, http.StatusServiceUnavailable, "No blockchain nodes discovered")
 		return
 	}
 
 	// Check for specific node query parameter
 	nodeIDParam := r.URL.Query().Get("node")
+	if nodeIDParam != "" {
+		log.WithField("specificNode", nodeIDParam).Debug("Request for specific node only")
+	}
 
 	nodeResults := make(map[string]interface{})
 
@@ -515,9 +655,14 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 		}).Debug("Getting latest blocks from node")
 
 		// First get blockchain info to determine the latest block index
-		info, err := s.nodeClient.RequestBlockchainInfo(node.Address)
+		log.WithField("nodeID", node.NodeID).Debug("Getting blockchain info to determine latest block index")
+		info, err := s.nodeClient.RequestBlockchainInfo(node.NodeID)
 		if err != nil {
-			log.WithError(err).WithField("nodeID", node.NodeID).Warn("Failed to get blockchain info from node")
+			log.WithFields(logrus.Fields{
+				"nodeID":  node.NodeID,
+				"address": node.Address,
+				"error":   err,
+			}).Warn("Failed to get blockchain info from node")
 			nodeResults[node.NodeID] = map[string]interface{}{
 				"blocks": nil,
 				"error":  err.Error(),
@@ -526,7 +671,13 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 		}
 
 		totalBlocks := info.TotalBlocks
+		log.WithFields(logrus.Fields{
+			"nodeID":      node.NodeID,
+			"totalBlocks": totalBlocks,
+		}).Debug("Retrieved blockchain info from node")
+		
 		if totalBlocks == 0 {
+			log.WithField("nodeID", node.NodeID).Info("Node has empty blockchain")
 			nodeResults[node.NodeID] = map[string]interface{}{
 				"blocks":  []interface{}{},
 				"count":   0,
@@ -542,22 +693,42 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 			startIndex = latestIndex - uint64(n-1)
 		}
 
+		log.WithFields(logrus.Fields{
+			"nodeID":      node.NodeID,
+			"startIndex":  startIndex,
+			"latestIndex": latestIndex,
+			"blockCount":  latestIndex - startIndex + 1,
+		}).Info("Fetching block range from node")
+
 		// Fetch the blocks
 		var blocks []interface{}
 		var fetchErrors []string
+		var successfulFetches int
 
 		for i := startIndex; i <= latestIndex; i++ {
-			block, err := s.nodeClient.RequestBlock(node.Address, i)
+			log.WithFields(logrus.Fields{
+				"nodeID":     node.NodeID,
+				"blockIndex": i,
+			}).Debug("Requesting block from node")
+			
+			block, err := s.nodeClient.RequestBlock(node.NodeID, i)
 			if err != nil {
-				log.WithError(err).WithFields(logrus.Fields{
+				log.WithFields(logrus.Fields{
 					"nodeID":     node.NodeID,
 					"blockIndex": i,
+					"error":      err,
 				}).Warn("Failed to get block from node")
 				fetchErrors = append(fetchErrors, fmt.Sprintf("Block %d: %s", i, err.Error()))
 				continue
 			}
 
 			if block != nil {
+				log.WithFields(logrus.Fields{
+					"nodeID":     node.NodeID,
+					"blockIndex": block.Index,
+					"blockHash":  block.Hash,
+				}).Debug("Successfully retrieved block from node")
+				
 				blocks = append(blocks, map[string]interface{}{
 					"index":             block.Index,
 					"timestamp":         block.Timestamp,
@@ -566,6 +737,7 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 					"data":              block.Data,
 					"validator_address": block.ValidatorAddress,
 				})
+				successfulFetches++
 			}
 		}
 
@@ -574,32 +746,54 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 			blocks[i], blocks[j] = blocks[j], blocks[i]
 		}
 
+		log.WithFields(logrus.Fields{
+			"nodeID":           node.NodeID,
+			"blocksRetrieved":  len(blocks),
+			"blocksRequested":  n,
+			"successfulFetches": successfulFetches,
+			"fetchErrors":      len(fetchErrors),
+		}).Info("Completed block fetching from node")
+
 		result := map[string]interface{}{
-			"blocks":       blocks,
-			"count":        len(blocks),
-			"requested":    n,
-			"latest_index": latestIndex,
-			"total_blocks": totalBlocks,
+			"blocks":            blocks,
+			"count":             len(blocks),
+			"requested":         n,
+			"successful_fetches": successfulFetches,
+			"latest_index":      latestIndex,
+			"total_blocks":      totalBlocks,
 		}
 
 		if len(fetchErrors) > 0 {
 			result["errors"] = fetchErrors
+			log.WithFields(logrus.Fields{
+				"nodeID":     node.NodeID,
+				"errorCount": len(fetchErrors),
+			}).Warn("Some blocks could not be fetched from node")
 		}
 
 		nodeResults[node.NodeID] = result
 	}
 
 	if len(nodeResults) == 0 {
+		log.WithField("requestedBlocks", n).Warn("No results from any nodes for latest blocks request")
 		s.writeError(w, http.StatusNotFound, "No results from any nodes")
 		return
 	}
 
+	log.WithFields(logrus.Fields{
+		"requestedBlocks": n,
+		"nodesResponded":  len(nodeResults),
+		"totalNodes":      len(nodes),
+	}).Info("Latest blocks request completed")
+
 	responseData := map[string]interface{}{
 		"node_results":     nodeResults,
 		"requested_blocks": n,
-		"total_nodes":      len(nodeResults),
+		"nodes_responded":  len(nodeResults),
+		"total_nodes":      len(nodes),
 		"timestamp":        time.Now(),
 	}
 
-	s.writeSuccess(w, responseData, fmt.Sprintf("Retrieved latest %d blocks successfully", n))
+	message := fmt.Sprintf("Retrieved latest %d blocks from %d/%d nodes", n, len(nodeResults), len(nodes))
+	s.writeSuccess(w, responseData, message)
 }

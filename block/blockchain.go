@@ -38,7 +38,16 @@ type Blockchain struct {
 func (blockchain *Blockchain) GetBlockCount() int {
 	blockchain.mutex.Lock()
 	defer blockchain.mutex.Unlock()
-	return len(blockchain.Blocks)
+	
+	blockCount := len(blockchain.Blocks)
+	log.WithFields(logger.Fields{
+		"blockCount": blockCount,
+		"hasMainHead": blockchain.MainHead != nil,
+		"hasGenesis": blockchain.Genesis != nil,
+		"headsCount": len(blockchain.Heads),
+	}).Debug("GetBlockCount: Current blockchain state")
+	
+	return blockCount
 }
 
 // NewBlockchain creates an empty blockchain
@@ -252,7 +261,12 @@ func (blockchain *Blockchain) updateMainChainFlags() error {
 			}
 			return ""
 		}(),
-		len(blockchain.BlockByHash),
+		func() int {
+			if blockchain.MainHead != nil {
+				return int(blockchain.MainHead.Index + 1) // Height = index + 1
+			}
+			return 0
+		}(),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update metadata: %w", err)
@@ -330,6 +344,15 @@ func (blockchain *Blockchain) needsMainChainUpdate() bool {
 func (blockchain *Blockchain) loadBlocksFromDatabase() error {
 	log.Debug("Loading blocks from SQLite database")
 
+	// First, let's check if we can count the blocks in the database
+	var blockCount int
+	countErr := blockchain.db.QueryRow("SELECT COUNT(*) FROM blocks").Scan(&blockCount)
+	if countErr != nil {
+		log.WithError(countErr).Error("Failed to count blocks in database")
+		return fmt.Errorf("failed to count blocks in database: %w", countErr)
+	}
+	log.WithField("blockCount", blockCount).Info("Found blocks in database for loading")
+
 	// Query all blocks ordered by index to maintain consistency
 	rows, err := blockchain.db.Query(`SELECT 
 		hash, block_index, timestamp, prev_hash, 
@@ -351,7 +374,9 @@ func (blockchain *Blockchain) loadBlocksFromDatabase() error {
 
 	// Load all blocks first
 	var allBlocks []*Block
+	var processedCount int
 	for rows.Next() {
+		processedCount++
 		block := &Block{
 			Children: make([]*Block, 0),
 		}
@@ -410,6 +435,11 @@ func (blockchain *Blockchain) loadBlocksFromDatabase() error {
 	if err = rows.Err(); err != nil {
 		return fmt.Errorf("error iterating blocks: %w", err)
 	}
+
+	log.WithFields(logger.Fields{
+		"processedCount": processedCount,
+		"validBlocks":    len(allBlocks),
+	}).Info("Completed processing blocks from database")
 
 	// No blocks found - empty database is okay
 	if len(allBlocks) == 0 {

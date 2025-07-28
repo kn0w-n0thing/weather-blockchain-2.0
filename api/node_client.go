@@ -27,6 +27,10 @@ const (
 	MessageTypeBlock MessageType = iota
 	MessageTypeBlockRequest
 	MessageTypeBlockResponse
+	MessageTypeBlockRangeRequest
+	MessageTypeBlockRangeResponse
+	MessageTypeHeightRequest
+	MessageTypeHeightResponse
 )
 
 // Message represents a network message
@@ -49,6 +53,19 @@ type BlockResponseMessage struct {
 type BlockchainRequestMessage struct {
 	RequestType string `json:"request_type"` // "info", "full_chain", "latest_blocks"
 	Count       int    `json:"count,omitempty"`
+}
+
+// HeightRequestMessage is used to request blockchain height information
+type HeightRequestMessage struct {
+	// Empty for now, could add filters in the future
+}
+
+// HeightResponseMessage is the response to a height request
+type HeightResponseMessage struct {
+	BlockCount   int    `json:"block_count"`
+	LatestIndex  uint64 `json:"latest_index"`
+	LatestHash   string `json:"latest_hash"`
+	GenesisHash  string `json:"genesis_hash"`
 }
 
 // NewNodeClient creates a new node client for API communication
@@ -78,10 +95,11 @@ func (nc *NodeClient) DiscoverNodes() error {
 
 	// Query for blockchain nodes
 	params := &mdns.QueryParam{
-		Service: nc.serviceName,
-		Domain:  nc.domain,
-		Timeout: 3 * time.Second,
-		Entries: entriesCh,
+		Service:     nc.serviceName,
+		Domain:      nc.domain,
+		Timeout:     3 * time.Second,
+		Entries:     entriesCh,
+		DisableIPv6: true, // Match the blockchain nodes' IPv6 setting
 	}
 
 	log.WithFields(logrus.Fields{
@@ -174,7 +192,7 @@ func (nc *NodeClient) GetDiscoveredNodes() []NodeInfo {
 	return nodes
 }
 
-// RequestBlockchainInfo requests blockchain information from a node
+// RequestBlockchainInfo requests blockchain information from a node using the new height request
 func (nc *NodeClient) RequestBlockchainInfo(nodeID string) (*BlockchainInfo, error) {
 	nc.mutex.RLock()
 	nodeInfo, exists := nc.discoveredNodes[nodeID]
@@ -188,7 +206,7 @@ func (nc *NodeClient) RequestBlockchainInfo(nodeID string) (*BlockchainInfo, err
 		"nodeID":  nodeID,
 		"address": nodeInfo.Address,
 		"port":    nodeInfo.Port,
-	}).Debug("Requesting blockchain info from node")
+	}).Debug("Requesting blockchain height info from node")
 
 	// Connect to the node
 	address := net.JoinHostPort(nodeInfo.Address, nodeInfo.Port)
@@ -203,19 +221,16 @@ func (nc *NodeClient) RequestBlockchainInfo(nodeID string) (*BlockchainInfo, err
 	}
 	defer conn.Close()
 
-	// For now, we'll request the latest block (index 0 means latest)
-	// In a real implementation, we might add custom message types for getting blockchain info
-	blockReq := BlockRequestMessage{
-		Index: 0, // Request latest block
-	}
+	// Use the new height request message
+	heightReq := HeightRequestMessage{}
 
-	reqData, err := json.Marshal(blockReq)
+	reqData, err := json.Marshal(heightReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal block request: %w", err)
+		return nil, fmt.Errorf("failed to marshal height request: %w", err)
 	}
 
 	msg := Message{
-		Type:    MessageTypeBlockRequest,
+		Type:    MessageTypeHeightRequest,
 		Payload: reqData,
 	}
 
@@ -224,10 +239,12 @@ func (nc *NodeClient) RequestBlockchainInfo(nodeID string) (*BlockchainInfo, err
 		return nil, fmt.Errorf("failed to marshal message: %w", err)
 	}
 
+	log.WithField("nodeID", nodeID).Debug("Sending height request to node")
+
 	// Send request
 	_, err = conn.Write(msgData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request to node %s: %w", nodeID, err)
+		return nil, fmt.Errorf("failed to send height request to node %s: %w", nodeID, err)
 	}
 
 	// Read response with timeout
@@ -240,41 +257,43 @@ func (nc *NodeClient) RequestBlockchainInfo(nodeID string) (*BlockchainInfo, err
 		return nil, fmt.Errorf("failed to read response from node %s: %w", nodeID, err)
 	}
 
-	if response.Type != MessageTypeBlockResponse {
-		return nil, fmt.Errorf("unexpected response type from node %s", nodeID)
+	if response.Type != MessageTypeHeightResponse {
+		return nil, fmt.Errorf("unexpected response type %d from node %s, expected height response", response.Type, nodeID)
 	}
 
-	var blockResp BlockResponseMessage
-	err = json.Unmarshal(response.Payload, &blockResp)
+	log.WithField("nodeID", nodeID).Debug("Received height response from node")
+
+	var heightResp HeightResponseMessage
+	err = json.Unmarshal(response.Payload, &heightResp)
 	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal block response: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal height response: %w", err)
 	}
 
-	// Create blockchain info from the response
+	// Create blockchain info from the height response
 	info := &BlockchainInfo{
-		LastUpdated: time.Now(),
+		TotalBlocks:  heightResp.BlockCount,
+		LatestHash:   heightResp.LatestHash,
+		GenesisHash:  heightResp.GenesisHash,
+		LastUpdated:  time.Now(),
+		ChainValid:   true, // Assume valid for now
 	}
 
-	if blockResp.Block != nil {
-		info.TotalBlocks = int(blockResp.Block.Index + 1) // Approximate
-		info.LatestHash = blockResp.Block.Hash
-		info.ChainValid = true // Assume valid for now
-
-		// Update node info with latest data
-		nc.mutex.Lock()
-		if nodeData, exists := nc.discoveredNodes[nodeID]; exists {
-			nodeData.BlockHeight = blockResp.Block.Index
-			nodeData.LatestHash = blockResp.Block.Hash
-			nodeData.LastSeen = time.Now()
-			nc.discoveredNodes[nodeID] = nodeData
-		}
-		nc.mutex.Unlock()
+	// Update node info with latest data
+	nc.mutex.Lock()
+	if nodeData, exists := nc.discoveredNodes[nodeID]; exists {
+		nodeData.BlockHeight = heightResp.LatestIndex
+		nodeData.LatestHash = heightResp.LatestHash
+		nodeData.LastSeen = time.Now()
+		nc.discoveredNodes[nodeID] = nodeData
 	}
+	nc.mutex.Unlock()
 
 	log.WithFields(logrus.Fields{
 		"nodeID":      nodeID,
-		"blockHeight": info.TotalBlocks,
-		"latestHash":  info.LatestHash,
+		"blockCount":  heightResp.BlockCount,
+		"latestIndex": heightResp.LatestIndex,
+		"latestHash":  heightResp.LatestHash,
+		"genesisHash": heightResp.GenesisHash,
 	}).Info("Successfully retrieved blockchain info from node")
 
 	return info, nil

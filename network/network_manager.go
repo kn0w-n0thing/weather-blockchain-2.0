@@ -44,6 +44,8 @@ const (
 	MessageTypeBlockResponse
 	MessageTypeBlockRangeRequest
 	MessageTypeBlockRangeResponse
+	MessageTypeHeightRequest
+	MessageTypeHeightResponse
 )
 
 // Message represents a network message
@@ -78,6 +80,19 @@ type BlockRangeResponseMessage struct {
 	StartIndex uint64         `json:"start_index"`
 	EndIndex   uint64         `json:"end_index"`
 	Blocks     []*block.Block `json:"blocks"`
+}
+
+// HeightRequestMessage is used to request blockchain height information
+type HeightRequestMessage struct {
+	// Empty for now, could add filters in the future
+}
+
+// HeightResponseMessage is the response to a height request
+type HeightResponseMessage struct {
+	BlockCount   int    `json:"block_count"`
+	LatestIndex  uint64 `json:"latest_index"`
+	LatestHash   string `json:"latest_hash"`
+	GenesisHash  string `json:"genesis_hash"`
 }
 
 const TcpNetwork = "tcp"
@@ -1267,6 +1282,94 @@ func (node *Node) handleConnection(conn net.Conn) {
 				"totalBlocks":        len(blockRangeResp.Blocks),
 				"successfullyQueued": successfullyQueued,
 			}).Info("handleConnection: Processed block range response")
+
+		case MessageTypeHeightRequest:
+			log.Debug("handleConnection: Processing height request message")
+
+			var heightReq HeightRequestMessage
+			if err := json.Unmarshal(msg.Payload, &heightReq); err != nil {
+				log.WithError(err).Error("handleConnection: Failed to unmarshal height request")
+				continue
+			}
+
+			log.Info("handleConnection: Received blockchain height request")
+
+			// Get blockchain height information
+			var heightResp HeightResponseMessage
+			if node.blockProvider != nil {
+				blockCount := node.blockProvider.GetBlockCount()
+				latestBlock := node.blockProvider.GetLatestBlock()
+
+				heightResp.BlockCount = blockCount
+				if blockCount > 0 {
+					heightResp.LatestIndex = uint64(blockCount - 1)
+				}
+				if latestBlock != nil {
+					heightResp.LatestHash = latestBlock.Hash
+				}
+
+				// Get genesis block hash
+				genesisBlock := node.blockProvider.GetBlockByIndex(0)
+				if genesisBlock != nil {
+					heightResp.GenesisHash = genesisBlock.Hash
+				}
+
+				log.WithFields(logger.Fields{
+					"blockCount":   blockCount,
+					"latestIndex":  heightResp.LatestIndex,
+					"latestHash":   heightResp.LatestHash,
+					"genesisHash":  heightResp.GenesisHash,
+				}).Info("handleConnection: Prepared height response")
+			} else {
+				log.Warn("handleConnection: No block provider available for height request")
+			}
+
+			// Create and send response
+			respPayload, err := json.Marshal(heightResp)
+			if err != nil {
+				log.WithError(err).Error("handleConnection: Failed to marshal height response")
+				continue
+			}
+
+			respMsg := Message{
+				Type:    MessageTypeHeightResponse,
+				Payload: respPayload,
+			}
+
+			respData, err := json.Marshal(respMsg)
+			if err != nil {
+				log.WithError(err).Error("handleConnection: Failed to marshal height response message")
+				continue
+			}
+
+			_, err = conn.Write(respData)
+			if err != nil {
+				log.WithError(err).Error("handleConnection: Failed to send height response")
+				continue
+			}
+
+			log.WithFields(logger.Fields{
+				"blockCount":  heightResp.BlockCount,
+				"latestIndex": heightResp.LatestIndex,
+			}).Info("handleConnection: Sent height response")
+
+		case MessageTypeHeightResponse:
+			log.Debug("handleConnection: Processing height response message")
+
+			var heightResp HeightResponseMessage
+			if err := json.Unmarshal(msg.Payload, &heightResp); err != nil {
+				log.WithError(err).Error("handleConnection: Failed to unmarshal height response")
+				continue
+			}
+
+			log.WithFields(logger.Fields{
+				"blockCount":  heightResp.BlockCount,
+				"latestIndex": heightResp.LatestIndex,
+				"latestHash":  heightResp.LatestHash,
+			}).Info("handleConnection: Received height response")
+
+			// Note: Height responses are typically handled by the requesting client
+			// This case is here for completeness and logging
 
 		default:
 			log.WithField("messageType", msg.Type).Warn("handleConnection: Received unknown message type")
