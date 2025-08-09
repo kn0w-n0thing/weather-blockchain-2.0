@@ -17,6 +17,7 @@ type Service struct {
 	db         *sql.DB
 	stopChan   chan struct{}
 	sourceName string
+	location   Location
 }
 
 // NewWeatherService creates a new weather service instance
@@ -30,6 +31,23 @@ func NewWeatherService() (*Service, error) {
 	sourceName := os.Getenv("WEATHER_SOURCE")
 	if sourceName == "" {
 		sourceName = "openweather" // Default to OpenWeather
+	}
+
+	// Get weather location from environment
+	locationStr := os.Getenv("WEATHER_LOCATION")
+	if locationStr == "" {
+		locationStr = "BJ" // Default to Beijing
+	}
+
+	// Parse location
+	var location Location
+	switch locationStr {
+	case "BJ":
+		location = Beijing
+	case "HK":
+		location = HongKong
+	default:
+		return nil, fmt.Errorf("invalid location: %s", locationStr)
 	}
 
 	// Create API instance
@@ -50,6 +68,7 @@ func NewWeatherService() (*Service, error) {
 		db:         db,
 		stopChan:   make(chan struct{}),
 		sourceName: sourceName,
+		location:   location,
 	}
 
 	// Check if weather data exists, if not fetch immediately
@@ -57,7 +76,7 @@ func NewWeatherService() (*Service, error) {
 	if err != nil {
 		// No weather data exists, fetch immediately
 		logger.Logger.Info("No existing weather data found, fetching initial data")
-		weatherData, fetchErr := api.FetchWeather()
+		weatherData, fetchErr := api.FetchWeather(service.location)
 		if fetchErr != nil {
 			logger.Logger.WithError(fetchErr).Warn("Failed to fetch initial weather data")
 		} else {
@@ -232,7 +251,7 @@ func (ws *Service) fetchWeatherWithRetry(api Api, attempts int, intervalSeconds 
 			time.Sleep(time.Duration(intervalSeconds) * time.Second)
 		}
 
-		data, err := api.FetchWeather()
+		data, err := api.FetchWeather(ws.location)
 		if err == nil {
 			return data, nil
 		}
@@ -406,4 +425,65 @@ func (ws *Service) GetWeatherDataCount() (int, error) {
 	var count int
 	err := ws.db.QueryRow("SELECT COUNT(*) FROM weather_data").Scan(&count)
 	return count, err
+}
+
+// PrintWeatherData fetches and prints weather data from all sources
+func PrintWeatherData() error {
+	fmt.Println("Fetching weather data from all sources...")
+
+	// Load environment variables from .env file
+	if err := loadEnv(); err != nil {
+		return fmt.Errorf("failed to load environment: %w", err)
+	}
+
+	// Get weather location from environment
+	locationStr := os.Getenv("WEATHER_LOCATION")
+	if locationStr == "" {
+		locationStr = "BJ" // Default to Beijing
+	}
+
+	// Parse location
+	var location Location
+	switch locationStr {
+	case "BJ":
+		location = Beijing
+	case "HK":
+		location = HongKong
+	default:
+		return fmt.Errorf("invalid location: %s", locationStr)
+	}
+
+	// List of all available weather sources
+	weatherSources := []string{"openweather", "accuweather", "xinzhi", "moji", "azure"}
+
+	fmt.Printf("\n=== Weather Data for %s ===\n", string(location))
+
+	for _, source := range weatherSources {
+		fmt.Printf("\n--- %s ---\n", source)
+
+		api, err := ApiFactory(source)
+		if err != nil {
+			fmt.Printf("Error creating API for %s: %v\n", source, err)
+			continue
+		}
+
+		data, err := api.FetchWeather(location)
+		if err != nil {
+			fmt.Printf("Error fetching weather from %s: %v\n", source, err)
+			continue
+		}
+
+		// Print weather data in a readable format
+		fmt.Printf("Source: %s\n", data.Source)
+		fmt.Printf("City: %s\n", data.City)
+		fmt.Printf("Condition: %s\n", data.Condition)
+		fmt.Printf("Temperature: %.1f°C\n", data.Temp)
+		fmt.Printf("Feels Like: %.1f°C\n", data.RTemp)
+		fmt.Printf("Wind Speed: %.1f m/s\n", data.WSpeed)
+		fmt.Printf("Wind Direction: %d°\n", data.WDir)
+		fmt.Printf("Humidity: %d%%\n", data.Hum)
+		fmt.Printf("Weather ID: %s\n", data.ID)
+	}
+
+	return nil
 }

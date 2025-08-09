@@ -17,6 +17,14 @@ import (
 
 var log = logger.Logger
 
+// Location represents supported weather locations
+type Location string
+
+const (
+	Beijing  Location = "BJ"
+	HongKong Location = "HK"
+)
+
 // Data represents the standardized weather data structure
 type Data struct {
 	Source    string  `json:"Source"`
@@ -33,7 +41,7 @@ type Data struct {
 
 // Api interface defines the contract for all weather API implementations
 type Api interface {
-	FetchWeather() (Data, error)
+	FetchWeather(location Location) (Data, error)
 	GetSource() string
 }
 
@@ -46,10 +54,20 @@ func (api *OpenWeatherAPI) GetSource() string {
 	return "Op"
 }
 
-func (api *OpenWeatherAPI) FetchWeather() (Data, error) {
-	data := Data{Source: api.GetSource(), City: "BJ", Timestamp: time.Now().UnixNano()}
+func (api *OpenWeatherAPI) FetchWeather(location Location) (Data, error) {
+	data := Data{Source: api.GetSource(), City: string(location), Timestamp: time.Now().UnixNano()}
 
-	url := fmt.Sprintf("https://api.openweathermap.org/data/2.5/weather?lat=39.904&lon=116.407&APPID=%s&units=metric", api.ApiKey)
+	var lat, lon string
+	switch location {
+	case Beijing:
+		lat, lon = "39.904", "116.407"
+	case HongKong:
+		lat, lon = "22.3193", "114.1694"
+	default:
+		return Data{}, fmt.Errorf("unsupported location: %s", location)
+	}
+
+	url := fmt.Sprintf("https://api.openweathermap.org/data/2.5/weather?lat=%s&lon=%s&APPID=%s&units=metric", lat, lon, api.ApiKey)
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -122,10 +140,20 @@ func (api *AccuWeatherAPI) GetSource() string {
 	return "Ac"
 }
 
-func (api *AccuWeatherAPI) FetchWeather() (Data, error) {
-	data := Data{Source: api.GetSource(), City: "BJ", Timestamp: time.Now().UnixNano()}
+func (api *AccuWeatherAPI) FetchWeather(location Location) (Data, error) {
+	data := Data{Source: api.GetSource(), City: string(location), Timestamp: time.Now().UnixNano()}
 
-	url := fmt.Sprintf("http://dataservice.accuweather.com/currentconditions/v1/101924?apikey=%s&details=true", api.ApiKey)
+	var locationKey string
+	switch location {
+	case Beijing:
+		locationKey = "101924"
+	case HongKong:
+		locationKey = "1123655"
+	default:
+		return Data{}, fmt.Errorf("unsupported location: %s", location)
+	}
+
+	url := fmt.Sprintf("https://dataservice.accuweather.com/currentconditions/v1/%s?apikey=%s&details=true", locationKey, api.ApiKey)
 
 	resp, err := http.Get(url)
 	if err != nil {
@@ -196,10 +224,20 @@ func (api *XinzhiWeatherAPI) GetSource() string {
 	return "Xz"
 }
 
-func (api *XinzhiWeatherAPI) FetchWeather() (Data, error) {
-	data := Data{Source: api.GetSource(), City: "BJ", Timestamp: time.Now().UnixNano()}
+func (api *XinzhiWeatherAPI) FetchWeather(location Location) (Data, error) {
+	data := Data{Source: api.GetSource(), City: string(location), Timestamp: time.Now().UnixNano()}
 
-	apiUrl := fmt.Sprintf("https://api.seniverse.com/v3/weather/now.json?key=%s&location=beijing&language=zh-Hans&unit=c", api.ApiKey)
+	var locationName string
+	switch location {
+	case Beijing:
+		locationName = "beijing"
+	case HongKong:
+		locationName = "xianggang"
+	default:
+		return Data{}, fmt.Errorf("unsupported location: %s", location)
+	}
+
+	apiUrl := fmt.Sprintf("https://api.seniverse.com/v3/weather/now.json?key=%s&location=%s&language=zh-Hans&unit=c", api.ApiKey, locationName)
 
 	resp, err := http.Get(apiUrl)
 	if err != nil {
@@ -290,13 +328,23 @@ func createMojiHTTPClient() *http.Client {
 	return &http.Client{Transport: tr}
 }
 
-func (api *MojiWeatherAPI) FetchWeather() (Data, error) {
-	data := Data{Source: api.GetSource(), City: "BJ", Timestamp: time.Now().UnixNano()}
+func (api *MojiWeatherAPI) FetchWeather(location Location) (Data, error) {
+	data := Data{Source: api.GetSource(), City: string(location), Timestamp: time.Now().UnixNano()}
 
 	apiUrl := "https://aliv18.data.moji.com/whapi/json/alicityweather/condition"
 
+	var cityId string
+	switch location {
+	case Beijing:
+		cityId = "2"
+	case HongKong:
+		cityId = "3173"
+	default:
+		return Data{}, fmt.Errorf("unsupported location: %s", location)
+	}
+
 	formData := url.Values{}
-	formData.Set("cityId", "2")
+	formData.Set("cityId", cityId)
 	formData.Set("token", api.Token)
 
 	req, err := http.NewRequest("POST", apiUrl, bytes.NewBufferString(formData.Encode()))
@@ -329,7 +377,7 @@ func (api *MojiWeatherAPI) FetchWeather() (Data, error) {
 		"rawData": string(body),
 	}).Debug("Received raw weather data")
 
-	if _, ok := rawData["results"].([]interface{}); !ok {
+	if _, ok := rawData["data"].(map[string]interface{}); !ok {
 		return data, fmt.Errorf("API response error: %s", rawData["rc"].(map[string]interface{})["p"].(string))
 	}
 
@@ -385,10 +433,20 @@ func (api *AzureWeatherAPI) GetSource() string {
 	return "MS"
 }
 
-func (api *AzureWeatherAPI) FetchWeather() (Data, error) {
-	data := Data{Source: api.GetSource(), City: "BJ", Timestamp: time.Now().UnixNano()}
+func (api *AzureWeatherAPI) FetchWeather(location Location) (Data, error) {
+	data := Data{Source: api.GetSource(), City: string(location), Timestamp: time.Now().UnixNano()}
 
-	apiUrl := fmt.Sprintf("https://atlas.microsoft.com/weather/currentConditions/json?api-version=1.1&query=39.906,116.391&language=zh-HanS-CN&duration=0&subscription-key=%s", api.SubscriptionKey)
+	var lat, lon string
+	switch location {
+	case Beijing:
+		lat, lon = "39.906", "116.391"
+	case HongKong:
+		lat, lon = "22.3193", "114.1694"
+	default:
+		return Data{}, fmt.Errorf("unsupported location: %s", location)
+	}
+
+	apiUrl := fmt.Sprintf("https://atlas.microsoft.com/weather/currentConditions/json?api-version=1.1&query=%s,%s&language=zh-HanS-CN&duration=0&subscription-key=%s", lat, lon, api.SubscriptionKey)
 
 	resp, err := http.Get(apiUrl)
 	if err != nil {

@@ -103,6 +103,12 @@ func defineFlags() []cli.Flag {
 			Value: false,
 			Usage: "Enable validator selection debug output",
 		},
+		&cli.BoolFlag{
+			Name:    "print-weather",
+			Aliases: []string{"w"},
+			Value:   false,
+			Usage:   "Fetch and print weather data from all sources",
+		},
 	}
 }
 
@@ -125,6 +131,11 @@ func runApp(ctx *cli.Context) error {
 	// Initialize centralized logging system first
 	if err := logger.InitializeLogger("logs"); err != nil {
 		return fmt.Errorf("failed to initialize logger: %v", err)
+	}
+
+	// Handle print-weather option early
+	if ctx.Bool("print-weather") {
+		return weather.PrintWeatherData()
 	}
 
 	// Handle PEM-only creation early
