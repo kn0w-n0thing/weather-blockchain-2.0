@@ -13,6 +13,14 @@ import (
 	"weather-blockchain/protocol"
 )
 
+// NodeClientInterface defines the interface for blockchain node communication
+type NodeClientInterface interface {
+	GetDiscoveredNodes() []NodeInfo
+	DiscoverNodes() error
+	RequestBlockchainInfo(nodeID string) (*BlockchainInfo, error)
+	RequestBlock(nodeID string, blockIndex uint64) (*block.Block, error)
+}
+
 // NodeClient handles communication with blockchain nodes
 type NodeClient struct {
 	discoveredNodes map[string]NodeInfo

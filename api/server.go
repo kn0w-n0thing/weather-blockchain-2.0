@@ -3,10 +3,12 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+	"weather-blockchain/block"
 	"weather-blockchain/logger"
 
 	"github.com/sirupsen/logrus"
@@ -17,12 +19,12 @@ var log = logger.Logger
 // Server represents the API server
 type Server struct {
 	port       string
-	nodeClient *NodeClient
+	nodeClient NodeClientInterface
 	httpServer *http.Server
 }
 
-// APIResponse represents a standard API response
-type APIResponse struct {
+// Response represents a standard API response
+type Response struct {
 	Success bool        `json:"success"`
 	Data    interface{} `json:"data,omitempty"`
 	Error   string      `json:"error,omitempty"`
@@ -81,8 +83,8 @@ func (s *Server) Start() error {
 	}
 
 	log.WithFields(logrus.Fields{
-		"port":           s.port,
-		"address":        s.httpServer.Addr,
+		"port":            s.port,
+		"address":         s.httpServer.Addr,
 		"discoveredNodes": len(s.nodeClient.GetDiscoveredNodes()),
 	}).Info("Blockchain API server configured and ready to start")
 
@@ -155,7 +157,7 @@ func (s *Server) writeJSON(w http.ResponseWriter, statusCode int, data interface
 
 // writeError writes an error response
 func (s *Server) writeError(w http.ResponseWriter, statusCode int, message string) {
-	response := APIResponse{
+	response := Response{
 		Success: false,
 		Error:   message,
 	}
@@ -164,7 +166,7 @@ func (s *Server) writeError(w http.ResponseWriter, statusCode int, message strin
 
 // writeSuccess writes a success response
 func (s *Server) writeSuccess(w http.ResponseWriter, data interface{}, message string) {
-	response := APIResponse{
+	response := Response{
 		Success: true,
 		Data:    data,
 		Message: message,
@@ -297,7 +299,7 @@ func (s *Server) handleBlockchainInfo(w http.ResponseWriter, r *http.Request) {
 	log.Debug("API: Handling blockchain info request")
 	nodes := s.nodeClient.GetDiscoveredNodes()
 	log.WithField("availableNodes", len(nodes)).Debug("Checking available nodes for blockchain info")
-	
+
 	if len(nodes) == 0 {
 		log.Warn("No blockchain nodes available for info request")
 		s.writeError(w, http.StatusServiceUnavailable, "No blockchain nodes discovered")
@@ -316,7 +318,7 @@ func (s *Server) handleBlockchainInfo(w http.ResponseWriter, r *http.Request) {
 			"address": node.Address,
 			"port":    node.Port,
 		}).Debug("Requesting blockchain info from node")
-		
+
 		info, err := s.nodeClient.RequestBlockchainInfo(node.NodeID)
 		if err != nil {
 			log.WithFields(logrus.Fields{
@@ -351,11 +353,11 @@ func (s *Server) handleBlockchainInfo(w http.ResponseWriter, r *http.Request) {
 	}).Info("Blockchain info request completed")
 
 	responseData := map[string]interface{}{
-		"nodes":              nodeInfos,
-		"total_nodes":        len(nodes),
+		"nodes":               nodeInfos,
+		"total_nodes":         len(nodes),
 		"successful_requests": successfulRequests,
-		"errors":             totalErrors,
-		"timestamp":          time.Now(),
+		"errors":              totalErrors,
+		"timestamp":           time.Now(),
 	}
 
 	message := fmt.Sprintf("Retrieved blockchain info from %d/%d nodes (%d errors)", successfulRequests, len(nodes), totalErrors)
@@ -568,7 +570,7 @@ func (s *Server) handleBlockchainHeight(w http.ResponseWriter, r *http.Request) 
 	}
 
 	log.WithFields(logrus.Fields{
-		"maxHeight":         maxHeight,
+		"maxHeight":          maxHeight,
 		"consensusHeight":    consensusHeight,
 		"consensusNodeCount": maxCount,
 		"heightDistribution": heightCounts,
@@ -576,20 +578,20 @@ func (s *Server) handleBlockchainHeight(w http.ResponseWriter, r *http.Request) 
 	}).Info("Blockchain height analysis completed")
 
 	responseData := map[string]interface{}{
-		"max_height":          maxHeight,
-		"consensus_height":    consensusHeight,
+		"max_height":           maxHeight,
+		"consensus_height":     consensusHeight,
 		"consensus_node_count": maxCount,
-		"node_heights":        nodeHeights,
-		"height_distribution": heightCounts,
-		"total_nodes":         len(nodes),
-		"timestamp":           time.Now(),
+		"node_heights":         nodeHeights,
+		"height_distribution":  heightCounts,
+		"total_nodes":          len(nodes),
+		"timestamp":            time.Now(),
 	}
 
 	message := fmt.Sprintf("Blockchain height retrieved: max=%d, consensus=%d (%d nodes)", maxHeight, consensusHeight, maxCount)
 	s.writeSuccess(w, responseData, message)
 }
 
-// handleLatestBlocks gets the n latest blocks from the blockchain
+// handleLatestBlocks gets the n latest blocks from the blockchain with consensus logic
 func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 	log.WithField("remoteAddr", r.RemoteAddr).Debug("API: Handling latest blocks request")
 
@@ -623,7 +625,7 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.WithField("requestedBlocks", n).Info("Processing latest blocks request")
+	log.WithField("requestedBlocks", n).Info("Processing latest blocks request with consensus")
 
 	// Get discovered nodes
 	nodes := s.nodeClient.GetDiscoveredNodes()
@@ -634,166 +636,296 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check for specific node query parameter
-	nodeIDParam := r.URL.Query().Get("node")
-	if nodeIDParam != "" {
-		log.WithField("specificNode", nodeIDParam).Debug("Request for specific node only")
-	}
-
-	nodeResults := make(map[string]interface{})
-
-	for _, node := range nodes {
-		// If specific node requested, skip others
-		if nodeIDParam != "" && node.NodeID != nodeIDParam {
-			continue
-		}
-
-		log.WithFields(logrus.Fields{
-			"nodeID":  node.NodeID,
-			"address": node.Address,
-			"blocks":  n,
-		}).Debug("Getting latest blocks from node")
-
-		// First get blockchain info to determine the latest block index
-		log.WithField("nodeID", node.NodeID).Debug("Getting blockchain info to determine latest block index")
-		info, err := s.nodeClient.RequestBlockchainInfo(node.NodeID)
-		if err != nil {
-			log.WithFields(logrus.Fields{
-				"nodeID":  node.NodeID,
-				"address": node.Address,
-				"error":   err,
-			}).Warn("Failed to get blockchain info from node")
-			nodeResults[node.NodeID] = map[string]interface{}{
-				"blocks": nil,
-				"error":  err.Error(),
-			}
-			continue
-		}
-
-		totalBlocks := info.TotalBlocks
-		log.WithFields(logrus.Fields{
-			"nodeID":      node.NodeID,
-			"totalBlocks": totalBlocks,
-		}).Debug("Retrieved blockchain info from node")
-		
-		if totalBlocks == 0 {
-			log.WithField("nodeID", node.NodeID).Info("Node has empty blockchain")
-			nodeResults[node.NodeID] = map[string]interface{}{
-				"blocks":  []interface{}{},
-				"count":   0,
-				"message": "No blocks found in blockchain",
-			}
-			continue
-		}
-
-		// Calculate the range of blocks to fetch
-		latestIndex := uint64(totalBlocks - 1) // Convert to 0-indexed
-		startIndex := uint64(0)
-		if latestIndex >= uint64(n-1) {
-			startIndex = latestIndex - uint64(n-1)
-		}
-
-		log.WithFields(logrus.Fields{
-			"nodeID":      node.NodeID,
-			"startIndex":  startIndex,
-			"latestIndex": latestIndex,
-			"blockCount":  latestIndex - startIndex + 1,
-		}).Info("Fetching block range from node")
-
-		// Fetch the blocks
-		var blocks []interface{}
-		var fetchErrors []string
-		var successfulFetches int
-
-		for i := startIndex; i <= latestIndex; i++ {
-			log.WithFields(logrus.Fields{
-				"nodeID":     node.NodeID,
-				"blockIndex": i,
-			}).Debug("Requesting block from node")
-			
-			block, err := s.nodeClient.RequestBlock(node.NodeID, i)
-			if err != nil {
-				log.WithFields(logrus.Fields{
-					"nodeID":     node.NodeID,
-					"blockIndex": i,
-					"error":      err,
-				}).Warn("Failed to get block from node")
-				fetchErrors = append(fetchErrors, fmt.Sprintf("Block %d: %s", i, err.Error()))
-				continue
-			}
-
-			if block != nil {
-				log.WithFields(logrus.Fields{
-					"nodeID":     node.NodeID,
-					"blockIndex": block.Index,
-					"blockHash":  block.Hash,
-				}).Debug("Successfully retrieved block from node")
-				
-				blocks = append(blocks, map[string]interface{}{
-					"index":             block.Index,
-					"timestamp":         block.Timestamp,
-					"hash":              block.Hash,
-					"prev_hash":         block.PrevHash,
-					"data":              block.Data,
-					"validator_address": block.ValidatorAddress,
-				})
-				successfulFetches++
-			}
-		}
-
-		// Reverse blocks to show latest first
-		for i, j := 0, len(blocks)-1; i < j; i, j = i+1, j-1 {
-			blocks[i], blocks[j] = blocks[j], blocks[i]
-		}
-
-		log.WithFields(logrus.Fields{
-			"nodeID":           node.NodeID,
-			"blocksRetrieved":  len(blocks),
-			"blocksRequested":  n,
-			"successfulFetches": successfulFetches,
-			"fetchErrors":      len(fetchErrors),
-		}).Info("Completed block fetching from node")
-
-		result := map[string]interface{}{
-			"blocks":            blocks,
-			"count":             len(blocks),
-			"requested":         n,
-			"successful_fetches": successfulFetches,
-			"latest_index":      latestIndex,
-			"total_blocks":      totalBlocks,
-		}
-
-		if len(fetchErrors) > 0 {
-			result["errors"] = fetchErrors
-			log.WithFields(logrus.Fields{
-				"nodeID":     node.NodeID,
-				"errorCount": len(fetchErrors),
-			}).Warn("Some blocks could not be fetched from node")
-		}
-
-		nodeResults[node.NodeID] = result
-	}
-
-	if len(nodeResults) == 0 {
-		log.WithField("requestedBlocks", n).Warn("No results from any nodes for latest blocks request")
-		s.writeError(w, http.StatusNotFound, "No results from any nodes")
+	// Get consensus blocks using majority rule
+	consensusBlocks, consensusInfo, err := s.getConsensusBlocks(nodes, n)
+	if err != nil {
+		log.WithError(err).Error("Failed to get consensus blocks")
+		s.writeError(w, http.StatusInternalServerError, "Failed to achieve consensus on latest blocks")
 		return
 	}
 
 	log.WithFields(logrus.Fields{
-		"requestedBlocks": n,
-		"nodesResponded":  len(nodeResults),
+		"consensusBlocks": len(consensusBlocks),
+		"nodesResponded":  consensusInfo.NodesResponded,
 		"totalNodes":      len(nodes),
-	}).Info("Latest blocks request completed")
+	}).Info("Latest blocks consensus completed")
 
 	responseData := map[string]interface{}{
-		"node_results":     nodeResults,
-		"requested_blocks": n,
-		"nodes_responded":  len(nodeResults),
-		"total_nodes":      len(nodes),
-		"timestamp":        time.Now(),
+		"blocks":          consensusBlocks,
+		"count":           len(consensusBlocks),
+		"requested":       n,
+		"consensus_info":  consensusInfo,
+		"nodes_responded": consensusInfo.NodesResponded,
+		"total_nodes":     len(nodes),
+		"timestamp":       time.Now(),
 	}
 
-	message := fmt.Sprintf("Retrieved latest %d blocks from %d/%d nodes", n, len(nodeResults), len(nodes))
+	message := fmt.Sprintf("Retrieved consensus of latest %d blocks from %d/%d nodes", len(consensusBlocks), consensusInfo.NodesResponded, len(nodes))
 	s.writeSuccess(w, responseData, message)
+}
+
+// getConsensusBlocks implements consensus-based block selection
+func (s *Server) getConsensusBlocks(nodes []NodeInfo, n int) ([]*block.Block, *ConsensusInfo, error) {
+	log.WithFields(logrus.Fields{
+		"nodeCount":       len(nodes),
+		"requestedBlocks": n,
+	}).Info("Starting consensus block retrieval")
+
+	consensusInfo := &ConsensusInfo{
+		NodesResponded:    0,
+		ConsensusMethod:   "majority_rule",
+		MajorityThreshold: (len(nodes) / 2) + 1,
+		BlockSelections:   make(map[uint64]map[string]int),
+	}
+
+	// First, determine the consensus height across nodes
+	heightInfo, err := s.getConsensusHeight(nodes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to determine consensus height: %w", err)
+	}
+
+	if heightInfo.consensusHeight == 0 {
+		return []*block.Block{}, consensusInfo, nil
+	}
+
+	// Calculate the range of block indices to retrieve
+	startIndex := uint64(0)
+	if heightInfo.consensusHeight >= uint64(n) {
+		startIndex = heightInfo.consensusHeight - uint64(n) + 1
+	}
+
+	log.WithFields(logrus.Fields{
+		"consensusHeight": heightInfo.consensusHeight,
+		"startIndex":      startIndex,
+		"endIndex":        heightInfo.consensusHeight,
+		"blocksToGet":     int(heightInfo.consensusHeight - startIndex + 1),
+	}).Debug("Calculated block range for consensus retrieval")
+
+	// Collect blocks from all nodes for each index
+	nodeBlockData := make(map[string]map[uint64]*block.Block) // nodeID -> index -> block
+	nodeErrors := make(map[string][]string)
+
+	for _, node := range nodes {
+		nodeID := node.NodeID
+		nodeBlockData[nodeID] = make(map[uint64]*block.Block)
+
+		log.WithField("nodeID", nodeID).Debug("Requesting blocks from node")
+
+		// Request each block in the range
+		for index := startIndex; index <= heightInfo.consensusHeight; index++ {
+			block, err := s.nodeClient.RequestBlock(nodeID, index)
+			if err != nil {
+				log.WithFields(logrus.Fields{
+					"nodeID": nodeID,
+					"index":  index,
+					"error":  err,
+				}).Warn("Failed to get block from node")
+
+				if nodeErrors[nodeID] == nil {
+					nodeErrors[nodeID] = make([]string, 0)
+				}
+				nodeErrors[nodeID] = append(nodeErrors[nodeID], fmt.Sprintf("index %d: %v", index, err))
+				continue
+			}
+
+			if block != nil {
+				nodeBlockData[nodeID][index] = block
+
+				// Track block selections for consensus
+				if consensusInfo.BlockSelections[index] == nil {
+					consensusInfo.BlockSelections[index] = make(map[string]int)
+				}
+				consensusInfo.BlockSelections[index][block.Hash]++
+			}
+		}
+
+		if len(nodeErrors[nodeID]) == 0 {
+			consensusInfo.NodesResponded++
+		}
+	}
+
+	log.WithFields(logrus.Fields{
+		"nodesResponded": consensusInfo.NodesResponded,
+		"totalNodes":     len(nodes),
+		"blockIndices":   len(consensusInfo.BlockSelections),
+	}).Info("Completed block collection from all nodes")
+
+	// Apply consensus logic for each block index
+	consensusBlocks := make([]*block.Block, 0, n)
+
+	for index := startIndex; index <= heightInfo.consensusHeight; index++ {
+		blockSelections := consensusInfo.BlockSelections[index]
+		if len(blockSelections) == 0 {
+			log.WithField("index", index).Warn("No blocks found for index, skipping")
+			continue
+		}
+
+		selectedBlock := s.selectConsensusBlock(index, blockSelections, nodeBlockData, consensusInfo.MajorityThreshold)
+		if selectedBlock != nil {
+			consensusBlocks = append(consensusBlocks, selectedBlock)
+			log.WithFields(logrus.Fields{
+				"index": index,
+				"hash":  selectedBlock.Hash,
+			}).Debug("Added consensus block to result")
+		}
+	}
+
+	log.WithFields(logrus.Fields{
+		"consensusBlocks": len(consensusBlocks),
+		"requestedBlocks": n,
+		"method":          consensusInfo.ConsensusMethod,
+	}).Info("Consensus block selection completed")
+
+	return consensusBlocks, consensusInfo, nil
+}
+
+// selectConsensusBlock selects a single block using consensus rules
+func (s *Server) selectConsensusBlock(index uint64, blockSelections map[string]int, nodeBlockData map[string]map[uint64]*block.Block, majorityThreshold int) *block.Block {
+	log.WithFields(logrus.Fields{
+		"index":             index,
+		"uniqueHashes":      len(blockSelections),
+		"majorityThreshold": majorityThreshold,
+	}).Debug("Selecting consensus block for index")
+
+	// Find the hash with the most votes
+	maxVotes := 0
+	consensusHash := ""
+
+	for hash, votes := range blockSelections {
+		log.WithFields(logrus.Fields{
+			"index": index,
+			"hash":  hash,
+			"votes": votes,
+		}).Debug("Block selection candidate")
+
+		if votes > maxVotes {
+			maxVotes = votes
+			consensusHash = hash
+		}
+	}
+
+	// Check if we have majority consensus
+	if maxVotes >= majorityThreshold {
+		log.WithFields(logrus.Fields{
+			"index":         index,
+			"consensusHash": consensusHash,
+			"votes":         maxVotes,
+			"threshold":     majorityThreshold,
+		}).Info("Majority consensus achieved for block")
+
+		// Find and return the block with this hash
+		for _, blocks := range nodeBlockData {
+			if block, exists := blocks[index]; exists && block.Hash == consensusHash {
+				return block
+			}
+		}
+	}
+
+	// No majority consensus - randomly select from available blocks
+	log.WithFields(logrus.Fields{
+		"index":      index,
+		"maxVotes":   maxVotes,
+		"threshold":  majorityThreshold,
+		"candidates": len(blockSelections),
+	}).Info("No majority consensus, selecting random block")
+
+	// Collect all candidate blocks
+	candidates := make([]*block.Block, 0, len(blockSelections))
+	for hash := range blockSelections {
+		for _, blocks := range nodeBlockData {
+			if block, exists := blocks[index]; exists && block.Hash == hash {
+				candidates = append(candidates, block)
+				break // Only need one instance of each unique hash
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		log.WithField("index", index).Warn("No candidate blocks found for random selection")
+		return nil
+	}
+
+	// Randomly select a block
+	selectedIndex := rand.Intn(len(candidates))
+	selectedBlock := candidates[selectedIndex]
+
+	log.WithFields(logrus.Fields{
+		"index":           index,
+		"selectedHash":    selectedBlock.Hash,
+		"totalCandidates": len(candidates),
+		"randomIndex":     selectedIndex,
+	}).Info("Randomly selected block due to lack of consensus")
+
+	return selectedBlock
+}
+
+// heightConsensusResult contains consensus height information
+type heightConsensusResult struct {
+	consensusHeight uint64
+	maxHeight       uint64
+	nodeCount       int
+}
+
+// getConsensusHeight determines the consensus height across nodes
+func (s *Server) getConsensusHeight(nodes []NodeInfo) (*heightConsensusResult, error) {
+	log.WithField("nodeCount", len(nodes)).Debug("Determining consensus height across nodes")
+
+	heightCounts := make(map[uint64]int)
+	var maxHeight uint64 = 0
+
+	successfulNodes := 0
+	for _, node := range nodes {
+		info, err := s.nodeClient.RequestBlockchainInfo(node.NodeID)
+		if err != nil {
+			log.WithFields(logrus.Fields{
+				"nodeID": node.NodeID,
+				"error":  err,
+			}).Warn("Failed to get blockchain info for height consensus")
+			continue
+		}
+
+		height := uint64(info.TotalBlocks)
+		if height > 0 {
+			height = height - 1 // Convert from count to height (0-indexed)
+		}
+
+		heightCounts[height]++
+		if height > maxHeight {
+			maxHeight = height
+		}
+		successfulNodes++
+
+		log.WithFields(logrus.Fields{
+			"nodeID": node.NodeID,
+			"height": height,
+		}).Debug("Node height recorded for consensus")
+	}
+
+	if successfulNodes == 0 {
+		return nil, fmt.Errorf("no nodes responded successfully for height consensus")
+	}
+
+	// Find consensus height (most common height)
+	maxCount := 0
+	consensusHeight := uint64(0)
+	for height, count := range heightCounts {
+		if count > maxCount {
+			maxCount = count
+			consensusHeight = height
+		}
+	}
+
+	log.WithFields(logrus.Fields{
+		"consensusHeight":    consensusHeight,
+		"maxHeight":          maxHeight,
+		"consensusNodeCount": maxCount,
+		"totalResponses":     successfulNodes,
+		"heightDistribution": heightCounts,
+	}).Info("Height consensus analysis completed")
+
+	return &heightConsensusResult{
+		consensusHeight: consensusHeight,
+		maxHeight:       maxHeight,
+		nodeCount:       successfulNodes,
+	}, nil
 }

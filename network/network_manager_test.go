@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 	"weather-blockchain/block"
+	"weather-blockchain/protocol"
 )
 
 // Note: MockMDnsServerServer removed as we no longer need to mock the internal server
@@ -459,16 +460,16 @@ func TestSendBlockRangeRequest_NoPeers(t *testing.T) {
 
 // TestMessageTypes tests that all message types are properly defined
 func TestMessageTypes(t *testing.T) {
-	assert.Equal(t, MessageType(0), MessageTypeBlock)
-	assert.Equal(t, MessageType(1), MessageTypeBlockRequest)
-	assert.Equal(t, MessageType(2), MessageTypeBlockResponse)
-	assert.Equal(t, MessageType(3), MessageTypeBlockRangeRequest)
-	assert.Equal(t, MessageType(4), MessageTypeBlockRangeResponse)
+	assert.Equal(t, protocol.MessageType(0), protocol.MessageTypeBlock)
+	assert.Equal(t, protocol.MessageType(1), protocol.MessageTypeBlockRequest)
+	assert.Equal(t, protocol.MessageType(2), protocol.MessageTypeBlockResponse)
+	assert.Equal(t, protocol.MessageType(3), protocol.MessageTypeBlockRangeRequest)
+	assert.Equal(t, protocol.MessageType(4), protocol.MessageTypeBlockRangeResponse)
 }
 
 // TestBlockRangeRequestMessage tests the BlockRangeRequestMessage struct
 func TestBlockRangeRequestMessage(t *testing.T) {
-	msg := BlockRangeRequestMessage{
+	msg := protocol.BlockRangeRequestMessage{
 		StartIndex: 5,
 		EndIndex:   10,
 	}
@@ -484,7 +485,7 @@ func TestBlockRangeResponseMessage(t *testing.T) {
 	block2 := &block.Block{Index: 2, Data: "Block 2"}
 	blocks := []*block.Block{block1, block2}
 
-	msg := BlockRangeResponseMessage{
+	msg := protocol.BlockRangeResponseMessage{
 		StartIndex: 1,
 		EndIndex:   3,
 		Blocks:     blocks,

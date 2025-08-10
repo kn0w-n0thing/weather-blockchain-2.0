@@ -20,3 +20,11 @@ type BlockchainInfo struct {
 	LastUpdated    time.Time `json:"last_updated"`
 	ChainValid     bool      `json:"chain_valid"`
 }
+
+// ConsensusInfo represents consensus information for block selection
+type ConsensusInfo struct {
+	NodesResponded     int                        `json:"nodes_responded"`
+	ConsensusMethod    string                     `json:"consensus_method"`
+	MajorityThreshold  int                        `json:"majority_threshold"`
+	BlockSelections    map[uint64]map[string]int  `json:"block_selections"` // index -> hash -> count
+}

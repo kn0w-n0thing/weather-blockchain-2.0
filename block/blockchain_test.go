@@ -2236,7 +2236,7 @@ func TestLoadBlocksFromDatabaseError(t *testing.T) {
 	
 	err = bc.loadBlocksFromDatabase()
 	assert.Error(t, err, "Should fail to load blocks with closed database")
-	assert.Contains(t, err.Error(), "failed to query blocks")
+	assert.Contains(t, err.Error(), "failed to count blocks in database")
 }
 
 // TestLoadBlocksFromDatabaseScanError tests loadBlocksFromDatabase scan error
