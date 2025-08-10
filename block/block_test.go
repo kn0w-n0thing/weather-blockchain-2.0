@@ -3,7 +3,6 @@ package block
 import (
 	"bytes"
 	"encoding/hex"
-	"fmt"
 	"testing"
 	"time"
 	"weather-blockchain/account"
@@ -245,76 +244,70 @@ func TestGenesisBlockSignatureVerification(t *testing.T) {
 }
 
 func TestBlockSign(t *testing.T) {
+	// Create a test account
+	testAccount, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+
 	// Create a test block
 	testBlock := &Block{
 		Index:            1,
 		Timestamp:        1615000000,
 		PrevHash:         "abcdef1234567890",
-		ValidatorAddress: "testaddress123",
+		ValidatorAddress: testAccount.Address,
 		Data:             "Test Data",
 	}
 
 	// Calculate and store hash
 	testBlock.StoreHash()
 
-	// Create a test private key
-	testPrivateKey := "test-private-key-12345"
-
-	// Sign the block
-	testBlock.Sign(testPrivateKey)
+	// Sign the block with cryptographic account
+	err = testBlock.Sign(testAccount)
+	require.NoError(t, err, "Should sign block without error")
 
 	// Verify signature is not empty
 	assert.NotEmpty(t, testBlock.Signature, "Block signature should not be empty after signing")
 
-	// Verify signature format - since our implementation creates a signature with a specific format
-	signatureStr := string(testBlock.Signature)
-	expectedPrefix := "signed-" + testBlock.Hash
-	assert.True(t, len(signatureStr) > len(expectedPrefix),
-		"Signature should be longer than the prefix")
-	assert.Equal(t, expectedPrefix, signatureStr[:len(expectedPrefix)],
-		"Signature should start with the expected prefix")
+	// Verify public key is stored
+	assert.NotEmpty(t, testBlock.ValidatorPublicKey, "Block should have validator public key")
 
-	// Verify that signature includes the private key (our implementation includes this)
-	assert.Contains(t, signatureStr, testPrivateKey,
-		"Signature should contain the private key")
-
-	// Verify full signature format
-	expectedSignature := fmt.Sprintf("signed-%s-with-%s", testBlock.Hash, testPrivateKey)
-	assert.Equal(t, expectedSignature, signatureStr,
-		"Signature should match the expected format")
+	// Verify signature can be validated
+	isValid := testBlock.VerifySignature()
+	assert.True(t, isValid, "Block signature should be valid after signing")
 }
 
 func TestBlockVerifySignature(t *testing.T) {
+	// Create a test account
+	testAccount, err := account.New()
+	require.NoError(t, err, "Should create account without error")
+
 	// Create a test block
 	testBlock := &Block{
 		Index:            1,
 		Timestamp:        1615000000,
 		PrevHash:         "abcdef1234567890",
-		ValidatorAddress: "testaddress123",
+		ValidatorAddress: testAccount.Address,
 		Data:             "Test Data",
 	}
 
 	// Calculate and store hash
 	testBlock.StoreHash()
 
-	// Create a test private key
-	testPrivateKey := "test-private-key-12345"
-
-	// Sign the block
-	testBlock.Sign(testPrivateKey)
+	// Sign the block with cryptographic account
+	err = testBlock.Sign(testAccount)
+	require.NoError(t, err, "Should sign block without error")
 
 	// Verify signature with VerifySignature method
 	isValid := testBlock.VerifySignature()
 	assert.True(t, isValid, "Signature verification should pass for a correctly signed block")
 
-	// Tamper with the hash and verify signature fails
-	originalHash := testBlock.Hash
-	testBlock.Hash = "tampered-hash"
+	// Tamper with block data to change the calculated hash and verify signature fails
+	originalData := testBlock.Data
+	testBlock.Data = "Tampered Data"
 	isValidAfterTamper := testBlock.VerifySignature()
-	assert.False(t, isValidAfterTamper, "Signature verification should fail when hash is tampered")
+	assert.False(t, isValidAfterTamper, "Signature verification should fail when block data is tampered")
 
-	// Restore original hash and tamper with signature
-	testBlock.Hash = originalHash
+	// Restore original data and tamper with signature
+	testBlock.Data = originalData
 	testBlock.Signature = []byte("invalid-signature")
 	isValidWithTamperedSignature := testBlock.VerifySignature()
 	assert.False(t, isValidWithTamperedSignature, "Signature verification should fail with tampered signature")
@@ -326,48 +319,50 @@ func TestBlockVerifySignature(t *testing.T) {
 }
 
 func TestSignAndVerifyConsistency(t *testing.T) {
-	// Create multiple blocks with the same content but different private keys
-	createAndVerifyBlock := func(privateKey string) {
+	// Create multiple blocks with the same content but different accounts
+	createAndVerifyBlock := func(testAccount *account.Account) {
 		block := &Block{
 			Index:            1,
 			Timestamp:        1615000000,
 			PrevHash:         "abcdef1234567890",
-			ValidatorAddress: "testaddress123",
+			ValidatorAddress: testAccount.Address,
 			Data:             "Test Data",
 		}
 
 		block.StoreHash()
-		block.Sign(privateKey)
+		err := block.Sign(testAccount)
+		require.NoError(t, err, "Should sign block without error")
 
 		isValid := block.VerifySignature()
-		assert.True(t, isValid, "Signature verification should pass with key: %s", privateKey)
+		assert.True(t, isValid, "Signature verification should pass with account: %s", testAccount.Address)
 
 		// Changing any field should invalidate the signature
 		originalData := block.Data
 		block.Data = "Modified Data"
-		block.StoreHash() // Recalculate hash after modifying data
 
 		isValidAfterModification := block.VerifySignature()
 		assert.False(t, isValidAfterModification,
 			"Signature should be invalid after block content is modified")
 
-		// Restore original data but don't update hash
+		// Restore original data and verify signature is valid again
 		block.Data = originalData
 		isValidAfterRestoring := block.VerifySignature()
-		assert.False(t, isValidAfterRestoring,
-			"Signature should still be invalid because hash wasn't updated")
-
-		// Update hash and verify signature is valid again
-		block.StoreHash()
-		isValidAfterUpdatingHash := block.VerifySignature()
-		assert.True(t, isValidAfterUpdatingHash,
-			"Signature should be valid after restoring original data and updating hash")
+		assert.True(t, isValidAfterRestoring,
+			"Signature should be valid again after restoring original data")
 	}
 
-	// Test with different private keys
-	createAndVerifyBlock("private-key-1")
-	createAndVerifyBlock("another-private-key-2")
-	createAndVerifyBlock("third-private-key-3")
+	// Test with different accounts
+	testAccount1, err := account.New()
+	require.NoError(t, err, "Should create test account 1")
+	createAndVerifyBlock(testAccount1)
+
+	testAccount2, err := account.New()
+	require.NoError(t, err, "Should create test account 2")
+	createAndVerifyBlock(testAccount2)
+
+	testAccount3, err := account.New()
+	require.NoError(t, err, "Should create test account 3")
+	createAndVerifyBlock(testAccount3)
 }
 
 // Test Block tree structure methods

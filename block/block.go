@@ -1,6 +1,7 @@
 package block
 
 import (
+	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -24,7 +25,7 @@ type Block struct {
 	Signature          []byte
 	ValidatorPublicKey []byte
 	Hash               string
-	
+
 	// Tree structure for fork handling
 	Parent   *Block   `json:"-"`
 	Children []*Block `json:"-"`
@@ -60,7 +61,7 @@ func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
 	if creatorAccount == nil {
 		return nil, fmt.Errorf("creator account cannot be nil")
 	}
-	
+
 	log.WithField("validator", creatorAccount.Address).Info("Creating genesis block")
 
 	currentTime := time.Now().UnixNano()
@@ -84,7 +85,7 @@ func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
 		return nil, err
 	}
 	genesisBlock.Signature = signature
-	
+
 	// Store the public key bytes
 	publicKeyBytes, err := x509.MarshalPKIXPublicKey(creatorAccount.PublicKey)
 	if err != nil {
@@ -120,47 +121,94 @@ func (block *Block) StoreHash() {
 	}).Debug("Block hash stored successfully")
 }
 
-// Sign signs a block with a private key
-func (block *Block) Sign(privateKey string) {
+// Sign signs a block with a cryptographic account
+func (block *Block) Sign(signerAccount *account.Account) error {
+	if signerAccount == nil {
+		return fmt.Errorf("signer account cannot be nil")
+	}
+
 	log.WithFields(logger.Fields{
 		"index":     block.Index,
 		"timestamp": block.Timestamp,
 		"hash":      block.Hash,
-	}).Debug("Signing block with private key")
+		"signer":    signerAccount.Address,
+	}).Debug("Signing block with cryptographic signature")
 
-	// For a real implementation, use proper cryptographic signing
-	// For simplicity in this prototype, we'll use a placeholder
-	signatureStr := fmt.Sprintf("signed-%s-with-%s", block.Hash, privateKey)
-	block.Signature = []byte(signatureStr)
+	// Use proper cryptographic signing
+	signature, err := signerAccount.Sign(block.CalculateHash())
+	if err != nil {
+		log.WithError(err).Error("Failed to sign block")
+		return fmt.Errorf("failed to sign block: %w", err)
+	}
+
+	block.Signature = signature
+
+	// Store the public key bytes for verification
+	publicKeyBytes, err := x509.MarshalPKIXPublicKey(signerAccount.PublicKey)
+	if err != nil {
+		log.WithError(err).Error("Failed to marshal public key for block")
+		return fmt.Errorf("failed to marshal public key: %w", err)
+	}
+	block.ValidatorPublicKey = publicKeyBytes
 
 	log.WithFields(logger.Fields{
 		"index":        block.Index,
 		"signatureLen": len(block.Signature),
-	}).Debug("Block signed successfully")
+		"signer":       signerAccount.Address,
+	}).Debug("Block signed successfully with cryptographic signature")
+
+	return nil
 }
 
-// VerifySignature verifies the signature on a block
+// VerifySignature verifies the cryptographic signature on a block
 func (block *Block) VerifySignature() bool {
 	log.WithFields(logger.Fields{
 		"index":        block.Index,
 		"hash":         block.Hash,
 		"signatureLen": len(block.Signature),
-	}).Debug("Verifying block signature")
+		"validator":    block.ValidatorAddress,
+	}).Debug("Verifying block cryptographic signature")
 
-	// For a real implementation, use proper cryptographic verification
-	// For simplicity in this prototype, we'll use a placeholder check
-	signatureStr := string(block.Signature)
-	expectedPrefix := "signed-" + block.Hash
+	// Check if we have a signature and public key
+	if len(block.Signature) == 0 {
+		log.WithField("index", block.Index).Warn("Block has no signature to verify")
+		return false
+	}
 
-	valid := len(signatureStr) > len(expectedPrefix) && signatureStr[:len(expectedPrefix)] == expectedPrefix
+	if len(block.ValidatorPublicKey) == 0 {
+		log.WithField("index", block.Index).Warn("Block has no public key for signature verification")
+		return false
+	}
+
+	// Parse the public key
+	publicKey, err := x509.ParsePKIXPublicKey(block.ValidatorPublicKey)
+	if err != nil {
+		log.WithFields(logger.Fields{
+			"index": block.Index,
+			"error": err,
+		}).Error("Failed to parse public key from block")
+		return false
+	}
+
+	// Cast to ECDSA public key (assuming ECDSA is used in account package)
+	ecdsaPublicKey, ok := publicKey.(*ecdsa.PublicKey)
+	if !ok {
+		log.WithField("index", block.Index).Error("Public key is not ECDSA type")
+		return false
+	}
+
+	// Use proper cryptographic verification
+	blockHash := block.CalculateHash()
+	valid := account.VerifySignatureByPublicKey(ecdsaPublicKey, blockHash, block.Signature)
 
 	if valid {
-		log.WithField("index", block.Index).Debug("Block signature verified successfully")
+		log.WithField("index", block.Index).Debug("Block cryptographic signature verified successfully")
 	} else {
 		log.WithFields(logger.Fields{
 			"index":        block.Index,
 			"signatureLen": len(block.Signature),
-		}).Warn("Block signature verification failed")
+			"validator":    block.ValidatorAddress,
+		}).Warn("Block cryptographic signature verification failed")
 	}
 
 	return valid
@@ -177,12 +225,12 @@ func (block *Block) AddChild(child *Block) {
 
 	// Set parent relationship
 	child.Parent = block
-	
+
 	// Add to children list
 	block.Children = append(block.Children, child)
-	
+
 	log.WithFields(logger.Fields{
-		"parentIndex":  block.Index,
+		"parentIndex":   block.Index,
 		"childrenCount": len(block.Children),
 	}).Debug("Child block added successfully")
 }
@@ -201,7 +249,7 @@ func (block *Block) RemoveChild(child *Block) bool {
 			block.Children = append(block.Children[:i], block.Children[i+1:]...)
 			// Clear parent relationship
 			child.Parent = nil
-			
+
 			log.WithFields(logger.Fields{
 				"parentIndex":   block.Index,
 				"removedIndex":  child.Index,
@@ -210,7 +258,7 @@ func (block *Block) RemoveChild(child *Block) bool {
 			return true
 		}
 	}
-	
+
 	log.WithFields(logger.Fields{
 		"parentIndex": block.Index,
 		"childIndex":  child.Index,
@@ -222,12 +270,12 @@ func (block *Block) RemoveChild(child *Block) bool {
 func (block *Block) GetDepth() uint64 {
 	depth := uint64(0)
 	current := block
-	
+
 	for current.Parent != nil {
 		depth++
 		current = current.Parent
 	}
-	
+
 	return depth
 }
 
@@ -235,27 +283,27 @@ func (block *Block) GetDepth() uint64 {
 func (block *Block) GetPath() []*Block {
 	path := make([]*Block, 0)
 	current := block
-	
+
 	// Build path in reverse order
 	for current != nil {
 		path = append([]*Block{current}, path...)
 		current = current.Parent
 	}
-	
+
 	return path
 }
 
 // IsAncestorOf checks if this block is an ancestor of the given block
 func (block *Block) IsAncestorOf(descendant *Block) bool {
 	current := descendant.Parent
-	
+
 	for current != nil {
 		if current.Hash == block.Hash {
 			return true
 		}
 		current = current.Parent
 	}
-	
+
 	return false
 }
 
