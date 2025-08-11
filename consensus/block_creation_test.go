@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 	"weather-blockchain/block"
+	"weather-blockchain/weather"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +33,7 @@ func TestConsensusEngine_CreateBlock(t *testing.T) {
 	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create a new block
-	ce.createNewBlock(1)
+	ce.createNewBlockWithWeatherData(1, make(map[string]*weather.Data))
 
 	// Check if the block was created and added
 	latestBlock := bc.GetLatestBlock()
@@ -64,7 +65,7 @@ func TestConsensusEngine_CreateBlockNoGenesis(t *testing.T) {
 	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Try to create a block without genesis - should fail gracefully
-	ce.createNewBlock(1)
+	ce.createNewBlockWithWeatherData(1, make(map[string]*weather.Data))
 
 	// Should not have created any blocks
 	assert.Nil(t, bc.GetLatestBlock(), "Should not create block without genesis")
@@ -94,7 +95,7 @@ func TestConsensusEngine_WeatherServiceError(t *testing.T) {
 	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create a new block despite weather service error
-	ce.createNewBlock(1)
+	ce.createNewBlockWithWeatherData(1, make(map[string]*weather.Data))
 
 	// Check if the block was still created (weather error should not prevent block creation)
 	latestBlock := bc.GetLatestBlock()
@@ -126,7 +127,7 @@ func TestConsensusEngine_NilWeatherService(t *testing.T) {
 	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, nil, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create a new block
-	ce.createNewBlock(1)
+	ce.createNewBlockWithWeatherData(1, make(map[string]*weather.Data))
 
 	// Check if the block was created
 	latestBlock := bc.GetLatestBlock()
@@ -162,7 +163,7 @@ func TestConsensusEngine_JSON_MarshalError(t *testing.T) {
 	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
 
 	// Create a new block
-	ce.createNewBlock(1)
+	ce.createNewBlockWithWeatherData(1, make(map[string]*weather.Data))
 
 	// Check if the block was created (should handle JSON marshal gracefully)
 	latestBlock := bc.GetLatestBlock()
@@ -232,7 +233,7 @@ func TestConsensusEngine_BlockDataStructure(t *testing.T) {
 
 	// Create a new block
 	slotId := uint64(42)
-	ce.createNewBlock(slotId)
+	ce.createNewBlockWithWeatherData(slotId, make(map[string]*weather.Data))
 
 	// Check the created block
 	latestBlock := bc.GetLatestBlock()

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 	"weather-blockchain/block"
+	"weather-blockchain/weather"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -161,7 +162,7 @@ func TestConsensusEngine_MonitorSlots(t *testing.T) {
 	// This tests the core logic without dealing with timing issues
 	currentSlot := mockTimeSync.GetCurrentSlot()
 	if mockValidatorSelection.IsLocalNodeValidatorForCurrentSlot() {
-		ce.createNewBlock(currentSlot)
+		ce.createNewBlockWithWeatherData(currentSlot, make(map[string]*weather.Data))
 	}
 
 	// Check if blocks were created

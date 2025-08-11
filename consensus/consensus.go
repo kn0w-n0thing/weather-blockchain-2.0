@@ -78,6 +78,10 @@ func (ce *Engine) monitorSlots() {
 			slotStart := ce.timeSync.GetSlotStartTime(currentSlot)
 			slotMidpoint := slotStart.Add(6 * time.Second) // Half of 12-second slot
 
+			// Collect weather data from peers during wait period
+			log.WithField("currentSlot", currentSlot).Debug("Collecting weather data from peer blocks")
+			peerWeatherData := ce.extractWeatherDataFromRecentBlocks(currentSlot)
+			
 			// Wait until midpoint if needed
 			now := ce.timeSync.GetNetworkTime()
 			if now.Before(slotMidpoint) {
@@ -90,9 +94,12 @@ func (ce *Engine) monitorSlots() {
 				time.Sleep(waitTime)
 			}
 
-			// Create new block
-			log.WithField("currentSlot", currentSlot).Info("Creating new block as validator")
-			ce.createNewBlock(currentSlot)
+			// Create new block with collected weather data
+			log.WithFields(logger.Fields{
+				"currentSlot":        currentSlot,
+				"peerWeatherSources": len(peerWeatherData),
+			}).Info("Creating new block as validator with collected weather data")
+			ce.createNewBlockWithWeatherData(currentSlot, peerWeatherData)
 		}
 
 		// Calculate time to next slot

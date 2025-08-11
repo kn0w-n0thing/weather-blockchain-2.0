@@ -6,6 +6,7 @@ import (
 	"time"
 	"weather-blockchain/block"
 	"weather-blockchain/logger"
+	"weather-blockchain/weather"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -141,7 +142,7 @@ func TestConsensusEngine_PerformConsensusReconciliation(t *testing.T) {
 
 	// Add some blocks to create a more realistic scenario
 	for i := 1; i <= 5; i++ {
-		ce.createNewBlock(uint64(i))
+		ce.createNewBlockWithWeatherData(uint64(i), make(map[string]*weather.Data))
 		time.Sleep(10 * time.Millisecond) // Small delay between blocks
 	}
 
