@@ -60,6 +60,10 @@ class GUI(QWidget):
         self.winner_icons = []
         self.current_weather_data = []
 
+        # Address to index mapping
+        self.address_to_index = {}
+        self._load_address_mapping()
+
         # Timers
         self.data_timer = QTimer()
 
@@ -68,9 +72,9 @@ class GUI(QWidget):
         self._setup_ui()
         self._init_window()
 
-        # Start operations
         self._refresh_data()
-        self._start_data_refresh_timer(1000)
+        # refresh every minute
+        self._start_data_refresh_timer(1 * 60 * 1000)
 
         self.logger.info("Weather Display initialization complete")
 
@@ -232,8 +236,8 @@ class GUI(QWidget):
                 return
 
             self.logger.info(f"Extracted {len(weather_blocks)} weather blocks")
-            
-            # Use latest block for current weather (index 0 is latest)
+
+            # Use the latest block for current weather (index 0 is latest)
             if weather_blocks:
                 self._update_current_weather(weather_blocks[0])
                 
@@ -255,34 +259,43 @@ class GUI(QWidget):
         weather_blocks = []
         
         try:
-            # Get the first available node's data
-            if not api_data:
-                self.logger.warning("Empty API response")
+            if not api_data or not api_data.get('success'):
+                self.logger.warning("Invalid API response")
                 return weather_blocks
-                
-            # Find first node with blocks data
-            node_data = None
-            for node_id, node_info in api_data.items():
-                if isinstance(node_info, dict) and 'blocks' in node_info:
-                    node_data = node_info['blocks']
-                    self.logger.info(f"Using blocks from node: {node_id}")
-                    break
-            
-            if not node_data:
-                self.logger.warning("No blocks data found in any node")
+
+            # Extract blocks from the new API response format
+            data = api_data.get('data', {})
+            blocks = data.get('blocks', [])
+
+            if not blocks:
+                self.logger.warning("No blocks data found in API response")
                 return weather_blocks
-            
+
+            self.logger.info(f"Found {len(blocks)} blocks in API response")
+
             # Extract weather data from blocks (blocks are already sorted latest first)
-            for block in node_data:
-                if isinstance(block, dict) and 'WeatherData' in block:
-                    weather_data = block['WeatherData']
-                    if weather_data:  # Only add blocks with weather data
-                        # Convert to the expected format
-                        weather_entry = {
-                            'time': block.get('Timestamp', 0),
-                            'data': weather_data
-                        }
-                        weather_blocks.append(weather_entry)
+            for block in blocks:
+                if isinstance(block, dict) and 'Data' in block:
+                    try:
+                        # Parse the JSON string in the Data field
+                        data_str = block['Data']
+                        weather_data = json.loads(data_str)
+
+                        if 'weather' in weather_data:
+                            # Convert to the expected format
+                            weather_entry = {
+                                'time': block.get('Timestamp', 0),
+                                'data': weather_data['weather'],
+                                'validator': block.get('ValidatorAddress')
+                            }
+                            weather_blocks.append(weather_entry)
+
+                    except json.JSONDecodeError as e:
+                        self.logger.error(f"Failed to parse block data JSON: {e}")
+                        continue
+                    except Exception as e:
+                        self.logger.error(f"Error processing block: {e}")
+                        continue
                         
             self.logger.info(f"Successfully extracted {len(weather_blocks)} weather blocks")
             return weather_blocks
@@ -290,6 +303,24 @@ class GUI(QWidget):
         except Exception as e:
             self.logger.error(f"Error extracting weather blocks: {e}")
             return weather_blocks
+
+    def _load_address_mapping(self):
+        """Load address to index mapping (hardcoded)"""
+        # Hardcoded address to display index mapping
+        self.address_to_index = {
+            '14a2ff93771e4e8e4f07dd67b004231f39fd278e': 0,
+            'ff56a228e2489ae8701fe6dc0dce61fbddfa6d46': 1,
+            '88a7337041a2a847cb877e22c6423428ef5cc0ed': 2
+        }
+        self.logger.info(f"Loaded address mappings: {self.address_to_index}")
+
+    def _get_index_from_address(self, address):
+        """Convert validator address to display index (0-2)"""
+        if address in self.address_to_index:
+            return self.address_to_index[address]
+
+        self.logger.warning(f"Unknown validator address: {address}, defaulting to index 0")
+        return 0
 
     def _update_current_weather(self, current_entry):
         """Update the current weather display"""
@@ -303,31 +334,30 @@ class GUI(QWidget):
         self.title_time.setText(self.data_manager.format_time(timestamp, '%H %M'))
 
         # Process weather data
-        for i, data in enumerate(current_entry['data']):
+        for address, weather_data in current_entry['data'].items():
             try:
-                weather = self.data_manager.parse_weather_entry(data, timestamp)
+                index = self._get_index_from_address(address)
+                weather = self.data_manager.parse_weather_entry(weather_data, timestamp)
                 weather_list.append(weather)
 
-                # Update city (from first entry)
-                if i == 0:
-                    self.title_city.setText(self.data_manager.get_display_city(weather.city))
+                self.title_city.setText(self.data_manager.get_display_city(weather.city))
 
                 # Check for the winner
-                if weather.is_winner:
-                    self.winner_id = weather.weather_id
-                    self.logger.info(f"Winner found: index={i}, id={weather.weather_id}, source={weather.source}")
+                if current_entry['validator'] == address:
+                    self.winner_id = index
+                    self.logger.info(f"Winner found: index={index}, id={weather.weather_id}, source={weather.source}")
 
                 # Update panel styling
                 if weather.source in ['Ac', 'MS', 'Op']:
-                    self.weather_panels[i].setObjectName('CurrentWeatherTitleEN')
+                    self.weather_panels[index].setObjectName('CurrentWeatherTitleEN')
                 else:
-                    self.weather_panels[i].setObjectName('CurrentWeatherTitleCN')
+                    self.weather_panels[index].setObjectName('CurrentWeatherTitleCN')
 
                 # Update source label
-                self.source_labels[i].setText(self.data_manager.get_display_source(weather.source))
+                self.source_labels[index].setText(self.data_manager.get_display_source(weather.source))
 
                 # Update weather panel content
-                self._update_weather_panel(i, weather)
+                self._update_weather_panel(index, weather)
 
             except Exception as e:
                 self.logger.error(f"Error processing weather entry {i}: {e}")
@@ -371,13 +401,12 @@ class GUI(QWidget):
 
         # Extract winner entries from past data
         for entry in reversed(past_entries):
-            for data in entry['data']:
-                if data.get('win') == 1:
-                    try:
-                        weather = self.data_manager.parse_weather_entry(data, entry['time'])
-                        past_weather_list.append(weather)
-                    except Exception as e:
-                        self.logger.error(f"Error parsing past weather entry: {e}")
+            for address, weather_data in entry['data'].items():
+                try:
+                    weather = self.data_manager.parse_weather_entry(weather_data, entry['time'])
+                    past_weather_list.append(weather)
+                except Exception as e:
+                    self.logger.error(f"Error parsing past weather entry: {e}")
 
         self.logger.info(f"Found {len(past_weather_list)} winner entries in past data")
 

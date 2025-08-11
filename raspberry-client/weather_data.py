@@ -1,7 +1,6 @@
-from dataclasses import dataclass
-from typing import List, Dict
-import time
 import logging
+import time
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ class WeatherData:
 class WeatherDataManager:
     """Manages weather data operations"""
 
-    CITY_NAMES = {'BJ': '北京'}
+    CITY_NAMES = {'BJ': '北京', 'HK': '香港'}
     SOURCE_NAMES = {
         'Mj': '墨迹天气',
         'Op': 'OpenWeather',
@@ -48,7 +47,6 @@ class WeatherDataManager:
                 wind_speed=data_dict['wSpeed'],
                 wind_direction=data_dict['wDir'],
                 timestamp=timestamp,
-                is_winner=data_dict.get('win', 0) == 1,
                 weather_id=data_dict.get('Id', 0)
             )
             logger.debug(f"Parsed weather data: {weather_data.source} - {weather_data.condition}")
@@ -77,6 +75,12 @@ class WeatherDataManager:
     @classmethod
     def format_time(cls, timestamp, format_str):
         """Format timestamp to string"""
-        formatted = time.strftime(format_str, time.localtime(timestamp))
+        # Convert nanosecond timestamp to seconds
+        if timestamp > 1e12:  # If timestamp appears to be in nanoseconds
+            timestamp_seconds = timestamp / 1e9
+        else:
+            timestamp_seconds = timestamp
+
+        formatted = time.strftime(format_str, time.localtime(timestamp_seconds))
         logger.debug(f"Formatted time {timestamp} -> {formatted}")
         return formatted
