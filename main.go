@@ -17,33 +17,33 @@ import (
 )
 
 const (
-	PemKeyFileName        = "key.pem"
+	PemKeyFileName       = "key.pem"
 	DefaultPort          = 18790
 	DiscoveryWaitTime    = 10 * time.Second
 	PeerDisplayInterval  = 10 * time.Second
-	SlotDuration         = 12 * time.Second
+	SlotDuration         = 10 * time.Minute
 	ValidatorDebugWait   = 2 * time.Second
 	ValidatorSlotsToTest = 10
 )
 
 // Config holds application configuration
 type Config struct {
-	PemPath         string
-	Port            int
-	GenesisMode     bool
-	BlockchainDir   string
-	OnlyCreatePem   bool
-	DebugMode       bool
+	PemPath       string
+	Port          int
+	GenesisMode   bool
+	BlockchainDir string
+	OnlyCreatePem bool
+	DebugMode     bool
 }
 
 // Services contains all running services
 type Services struct {
 	Node               *network.Node
-	TimeSync          *network.TimeSync
+	TimeSync           *network.TimeSync
 	ValidatorSelection *network.ValidatorSelection
 	ConsensusEngine    *consensus.Engine
 	Blockchain         *block.Blockchain
-	Account           *account.Account
+	Account            *account.Account
 	WeatherService     *weather.Service
 }
 
@@ -59,9 +59,9 @@ func (s *Services) Shutdown() {
 
 func main() {
 	app := &cli.App{
-		Name:  "weather-blockchain",
-		Usage: "Weather Blockchain client",
-		Flags: defineFlags(),
+		Name:   "weather-blockchain",
+		Usage:  "Weather Blockchain client",
+		Flags:  defineFlags(),
 		Action: runApp,
 	}
 
@@ -272,7 +272,7 @@ func startServices(config *Config, acc *account.Account, blockchain *block.Block
 	if err := node.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start node: %w", err)
 	}
-	
+
 	// Set blockchain reference for unified NetworkManager interface
 	node.SetBlockchain(blockchain)
 	services.Node = node
@@ -296,7 +296,7 @@ func startServices(config *Config, acc *account.Account, blockchain *block.Block
 		node.Stop() // Cleanup on failure
 		return nil, fmt.Errorf("failed to create weather service: %w", err)
 	}
-	
+
 	if err := weatherService.Start(); err != nil {
 		node.Stop() // Cleanup on failure
 		return nil, fmt.Errorf("failed to start weather service: %w", err)
@@ -324,9 +324,9 @@ func startServices(config *Config, acc *account.Account, blockchain *block.Block
 }
 
 // createConsensusEngine creates a consensus engine with proper key marshalling
-func createConsensusEngine(blockchain *block.Blockchain, timeSync *network.TimeSync, 
+func createConsensusEngine(blockchain *block.Blockchain, timeSync *network.TimeSync,
 	validatorSelection *network.ValidatorSelection, node *network.Node, weatherService *weather.Service, acc *account.Account) (*consensus.Engine, error) {
-	
+
 	privateKey, err := x509.MarshalECPrivateKey(acc.PrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal private key: %w", err)
@@ -338,7 +338,7 @@ func createConsensusEngine(blockchain *block.Blockchain, timeSync *network.TimeS
 	}
 
 	consensusEngine := consensus.NewConsensusEngine(
-		blockchain, timeSync, validatorSelection, node, 
+		blockchain, timeSync, validatorSelection, node,
 		weatherService, node.ID, publicKey, privateKey,
 	)
 
@@ -387,7 +387,7 @@ func startBackgroundTasks(services *Services) {
 // startNetworkBridge processes incoming blocks from network
 func startNetworkBridge(consensusEngine *consensus.Engine, node *network.Node) {
 	logger.Logger.Info("Starting network-to-consensus bridge")
-	
+
 	for incomingBlockInterface := range node.GetIncomingBlocks() {
 		// Type assert from interface{} to *block.Block
 		incomingBlock, ok := incomingBlockInterface.(*block.Block)
@@ -414,17 +414,17 @@ func startNetworkBridge(consensusEngine *consensus.Engine, node *network.Node) {
 			}).Info("Bridge: Successfully processed incoming block")
 		}
 	}
-	
+
 	logger.Logger.Info("Network-to-consensus bridge stopped")
 }
 
 // startNetworkSync attempts to sync with network peers
 func startNetworkSync(node *network.Node, blockchain *block.Blockchain) {
 	logger.Logger.Info("Attempting to sync with network peers...")
-	
+
 	// Wait for network discovery
 	time.Sleep(DiscoveryWaitTime)
-	
+
 	if err := node.SyncWithPeers(blockchain); err != nil {
 		logger.Logger.WithError(err).Warn("Network sync failed, continuing with empty blockchain")
 	}
