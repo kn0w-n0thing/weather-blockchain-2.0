@@ -4,7 +4,7 @@ from PyQt5.QtGui import QPixmap, QTransform
 from PyQt5.QtWidgets import QGraphicsOpacityEffect, QLabel, QFrame, QGridLayout, QWidget, QHBoxLayout
 
 from weather_data import WeatherDataManager
-
+import resources_rc
 
 class BreathingIcon(QLabel):
     def __init__(self, pixmap_path, duration=1500, min_opacity=0.2, max_opacity=1.0, auto_start=False):

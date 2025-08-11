@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QScrollArea, QGr
 import gpio_controller
 from ui_components import UIComponentFactory
 from weather_data import WeatherDataManager
+import resources_rc
 
 # Constants
 SCREEN_WIDTH = 540
