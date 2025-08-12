@@ -389,9 +389,7 @@ class GUI(QWidget):
         layout.removeWidget(old_widget)
         old_widget.deleteLater()
         
-        wind_widget = self.ui_factory.create_wind_widget(
-            format_to_one_decimal(weather.humidity),
-            format_to_one_decimal(weather.wind_speed),
+        wind_widget = self.ui_factory.create_wind_direction_widget(
             weather.wind_direction, 0
         )
         wind_widget.setObjectName('CurrentWeather')
