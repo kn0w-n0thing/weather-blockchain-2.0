@@ -338,7 +338,7 @@ class GUI(QWidget):
             # Convert to datetime and get the hour boundary
             dt = datetime.datetime.fromtimestamp(timestamp)
             hour_start = dt.replace(minute=0, second=0, microsecond=0)
-            hour_key = hour_start.timestamp()
+            hour_key = int(hour_start.timestamp())
             
             # Keep the first record for this hour (earliest since we sorted earliest to latest)
             if hour_key not in hourly_blocks:
@@ -448,7 +448,7 @@ class GUI(QWidget):
         past_weather_list = []
 
         # Extract winner entries from past data
-        for entry in reversed(past_entries):
+        for entry in past_entries:
             for address, weather_data in entry['data'].items():
                 try:
                     weather = self.data_manager.parse_weather_entry(weather_data, entry['time'])
