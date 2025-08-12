@@ -458,7 +458,8 @@ class GUI(QWidget):
             for address, weather_data in entry['data'].items():
                 try:
                     weather = self.data_manager.parse_weather_entry(weather_data, entry['time'])
-                    past_weather_list.append(weather)
+                    if address == entry['validator']:
+                        past_weather_list.append(weather)
                 except Exception as e:
                     self.logger.error(f"Error parsing past weather entry: {e}")
 

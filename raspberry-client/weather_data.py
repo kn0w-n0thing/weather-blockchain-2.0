@@ -17,7 +17,6 @@ class WeatherData:
     wind_speed: float
     wind_direction: int
     timestamp: int
-    is_winner: bool = False
     weather_id: int = 0
 
 
