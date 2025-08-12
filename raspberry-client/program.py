@@ -2,6 +2,7 @@ import json
 import logging
 import signal
 import sys
+import faulthandler
 
 import requests
 from PyQt5.QtCore import QTimer, Qt
@@ -24,6 +25,8 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
+# Enable fault handler
+faulthandler.enable()
 
 def signal_handler(sig, frame):
     logger = logging.getLogger(__name__)
