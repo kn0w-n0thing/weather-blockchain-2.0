@@ -346,10 +346,10 @@ class GUI(QWidget):
                 cleaned_block = block.copy()
                 cleaned_block['time'] = hour_key
                 
-                # Unify all weather data timestamps to match the block timestamp
+                # Unify all weather data timestamps to match the block timestamp (convert back to nanoseconds)
                 for address, weather_data in cleaned_block['data'].items():
-                    if isinstance(weather_data, dict) and 'timestamp' in weather_data:
-                        weather_data['timestamp'] = hour_key
+                    if isinstance(weather_data, dict) and 'Timestamp' in weather_data:
+                        weather_data['Timestamp'] = int(hour_key * 1000000000)
                 
                 hourly_blocks[hour_key] = cleaned_block
         
