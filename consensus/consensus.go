@@ -2,6 +2,7 @@ package consensus
 
 import (
 	"time"
+	"weather-blockchain/account"
 	"weather-blockchain/block"
 	"weather-blockchain/logger"
 	"weather-blockchain/network"
@@ -11,27 +12,26 @@ var log = logger.Logger
 
 // NewConsensusEngine creates a new consensus engine
 func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validatorSelection ValidatorSelection,
-	networkBroadcaster network.Broadcaster, weatherService WeatherService, validatorID string, pubKey []byte, private []byte) *Engine {
+	networkBroadcaster network.Broadcaster, weatherService WeatherService, validatorAccount *account.Account) *Engine {
 
 	log.WithFields(logger.Fields{
-		"validatorID": validatorID,
-		"pubKeySize":  len(pubKey),
+		"validatorID": validatorAccount.Address,
+		"pubKeySize":  len(validatorAccount.Address),
 	}).Debug("Creating new consensus engine")
 
 	engine := &Engine{
-		blockchain:          blockchain,
-		timeSync:            timeSync,
-		validatorSelection:  validatorSelection,
-		networkBroadcaster:  networkBroadcaster,
-		weatherService:      weatherService,
-		validatorID:         validatorID,
-		validatorPublicKey:  pubKey,
-		validatorPrivateKey: private,
-		pendingBlocks:       make(map[string]*block.Block),
-		forks:               make(map[uint64][]*block.Block),
+		blockchain:         blockchain,
+		timeSync:           timeSync,
+		validatorSelection: validatorSelection,
+		networkBroadcaster: networkBroadcaster,
+		weatherService:     weatherService,
+		validatorID:        validatorAccount.Address,
+		validatorAccount:   validatorAccount,
+		pendingBlocks:      make(map[string]*block.Block),
+		forks:              make(map[uint64][]*block.Block),
 	}
 
-	log.WithField("validatorID", validatorID).Info("Consensus engine created")
+	log.WithField("validatorID", validatorAccount.Address).Info("Consensus engine created")
 	return engine
 }
 

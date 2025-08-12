@@ -1,7 +1,6 @@
 package consensus
 
 import (
-	"fmt"
 	"testing"
 	"time"
 	"weather-blockchain/block"
@@ -29,7 +28,8 @@ func TestConsensusEngine_ReceiveBlock(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a new valid block
 	newBlock := CreateTestBlock(1, genesisBlock.Hash, "test-validator")
@@ -64,7 +64,8 @@ func TestConsensusEngine_ReceiveInvalidBlock(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a new block with invalid timestamp
 	newBlock := CreateTestBlock(1, genesisBlock.Hash, "test-validator")
@@ -97,7 +98,8 @@ func TestConsensusEngine_InvalidSignature(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a new block with invalid signature
 	newBlock := CreateTestBlock(1, genesisBlock.Hash, "test-validator")
@@ -132,7 +134,8 @@ func TestConsensusEngine_DuplicateBlock(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a new valid block
 	newBlock := CreateTestBlock(1, genesisBlock.Hash, "test-validator")
@@ -174,7 +177,8 @@ func TestConsensusEngine_GapDetectionInReceiveBlock(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create block 1 to add directly first
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -220,23 +224,24 @@ func TestConsensusEngine_VerifyBlockSignature_EdgeCases(t *testing.T) {
 	mockBroadcaster := NewMockBroadcaster()
 	mockWeatherService := NewMockWeatherService()
 
-	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	// Create consensus engine (not used in this test)
+	testAcc := createTestAccount()
+	_ = NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test empty signature
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "test-validator")
 	block1.Signature = []byte{}
-	assert.False(t, ce.verifyBlockSignature(block1), "Empty signature should be invalid")
+	assert.False(t, block1.VerifySignature(), "Empty signature should be invalid")
 
-	// Test signature with correct prefix but wrong format
+	// Test signature with wrong length (too short)
 	block2 := CreateTestBlock(1, genesisBlock.Hash, "test-validator")
-	block2.Signature = []byte(fmt.Sprintf("signed-%s-by-", block2.Hash)) // Missing validator part
-	assert.False(t, ce.verifyBlockSignature(block2), "Incomplete signature should be invalid")
+	block2.Signature = []byte("short-sig") // Wrong length for ECDSA signature
+	assert.False(t, block2.VerifySignature(), "Short signature should be invalid")
 
 	// Test correct signature
 	block3 := CreateTestBlock(1, genesisBlock.Hash, "test-validator")
-	// block3 already has correct signature from CreateTestBlock
-	assert.True(t, ce.verifyBlockSignature(block3), "Correct signature should be valid")
+	// block3 already has correct cryptographic signature from CreateTestBlock
+	assert.True(t, block3.VerifySignature(), "Correct cryptographic signature should be valid")
 }
 
 // TestConsensusEngine_UpdateValidatorSetFromBlock tests validator set updates
@@ -258,7 +263,8 @@ func TestConsensusEngine_UpdateValidatorSetFromBlock(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a block from a new validator
 	newValidatorBlock := CreateTestBlock(1, genesisBlock.Hash, "new-validator")
@@ -290,7 +296,8 @@ func TestConsensusEngine_BlockTimestampValidation(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test with valid timestamp
 	mockTimeSync.timeValidationCheck = true

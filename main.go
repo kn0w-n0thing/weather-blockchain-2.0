@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/x509"
 	"fmt"
 	"github.com/urfave/cli/v2"
 	"os"
@@ -323,23 +322,13 @@ func startServices(config *Config, acc *account.Account, blockchain *block.Block
 	return services, nil
 }
 
-// createConsensusEngine creates a consensus engine with proper key marshalling
+// createConsensusEngine creates a consensus engine with account
 func createConsensusEngine(blockchain *block.Blockchain, timeSync *network.TimeSync,
 	validatorSelection *network.ValidatorSelection, node *network.Node, weatherService *weather.Service, acc *account.Account) (*consensus.Engine, error) {
 
-	privateKey, err := x509.MarshalECPrivateKey(acc.PrivateKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal private key: %w", err)
-	}
-
-	publicKey, err := x509.MarshalPKIXPublicKey(acc.PublicKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal public key: %w", err)
-	}
-
 	consensusEngine := consensus.NewConsensusEngine(
 		blockchain, timeSync, validatorSelection, node,
-		weatherService, node.ID, publicKey, privateKey,
+		weatherService, acc,
 	)
 
 	return consensusEngine, nil

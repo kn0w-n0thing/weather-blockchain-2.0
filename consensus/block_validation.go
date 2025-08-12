@@ -47,7 +47,7 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 
 	// Verify the block's signature
 	log.WithField("blockIndex", block.Index).Debug("Verifying block signature")
-	if !ce.verifyBlockSignature(block) {
+	if !block.VerifySignature() {
 		log.WithFields(logger.Fields{
 			"blockIndex":    block.Index,
 			"blockHash":     block.Hash,
@@ -105,61 +105,6 @@ func (ce *Engine) ReceiveBlock(block *block.Block) error {
 	return nil
 }
 
-// verifyBlockSignature verifies the signature on a block
-func (ce *Engine) verifyBlockSignature(block *block.Block) bool {
-	log.WithFields(logger.Fields{
-		"blockIndex": block.Index,
-		"blockHash":  block.Hash,
-		"validator":  block.ValidatorAddress,
-	}).Debug("Verifying block signature")
-
-	// In a production environment, you would use proper crypto libraries
-	// to verify the signature using the validator's public key
-
-	// For the prototype, we'll use a simple verification method
-	// In a real implementation, you would use code like this:
-
-	/*
-		// Create a hash of block data (excluding signature)
-		data := fmt.Sprintf("%d%d%s%s%s",
-			block.Index, block.Timestamp, block.PrevHash, block.Data, block.ValidatorAddress)
-		hash := sha256.Sum256([]byte(data))
-
-		// Parse validator's public key
-		publicKey, _ := x509.ParsePKIXPublicKey(block.ValidatorPublicKey)
-		ecdsaKey := publicKey.(*ecdsa.PublicKey)
-
-		// Extract r and s from signature (assuming signature is r||s)
-		sigLen := len(block.Signature)
-		r := new(big.Int).SetBytes(block.Signature[:sigLen/2])
-		s := new(big.Int).SetBytes(block.Signature[sigLen/2:])
-
-		// Verify signature
-		return ecdsa.Verify(ecdsaKey, hash[:], r, s)
-	*/
-
-	// For the prototype, we'll use a simple verification
-	signatureStr := string(block.Signature)
-	expectedPrefix := fmt.Sprintf("signed-%s-by-", block.Hash)
-
-	valid := len(signatureStr) > len(expectedPrefix) && signatureStr[:len(expectedPrefix)] == expectedPrefix
-
-	if valid {
-		log.WithFields(logger.Fields{
-			"blockIndex": block.Index,
-			"blockHash":  block.Hash,
-		}).Debug("Block signature verification successful")
-	} else {
-		log.WithFields(logger.Fields{
-			"blockIndex":     block.Index,
-			"blockHash":      block.Hash,
-			"signatureStr":   signatureStr,
-			"expectedPrefix": expectedPrefix,
-		}).Warn("Block signature verification failed")
-	}
-
-	return valid
-}
 
 // updateValidatorSetFromBlock notifies the validator selection of a new validator from a received block
 func (ce *Engine) updateValidatorSetFromBlock(block *block.Block) {

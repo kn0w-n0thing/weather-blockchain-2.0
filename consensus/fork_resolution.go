@@ -393,7 +393,7 @@ func (ce *Engine) validateEntireChain(head *block.Block) bool {
 		}
 		
 		// Verify block signature
-		if !ce.verifyBlockSignature(currentBlock) {
+		if !currentBlock.VerifySignature() {
 			log.WithFields(logger.Fields{
 				"blockIndex": currentBlock.Index,
 				"blockHash":  currentBlock.Hash,

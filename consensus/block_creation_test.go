@@ -3,12 +3,19 @@ package consensus
 import (
 	"fmt"
 	"testing"
+	"weather-blockchain/account"
 	"weather-blockchain/block"
 	"weather-blockchain/weather"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// createTestAccount creates a test account for consensus tests
+func createTestAccount() *account.Account {
+	acc, _ := account.New()
+	return acc
+}
 
 // TestConsensusEngine_CreateBlock tests block creation as validator
 func TestConsensusEngine_CreateBlock(t *testing.T) {
@@ -30,7 +37,8 @@ func TestConsensusEngine_CreateBlock(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a new block
 	ce.createNewBlockWithWeatherData(1, make(map[string]*weather.Data))
@@ -39,7 +47,7 @@ func TestConsensusEngine_CreateBlock(t *testing.T) {
 	latestBlock := bc.GetLatestBlock()
 	assert.Equal(t, uint64(1), latestBlock.Index, "New block should have index 1")
 	assert.Equal(t, genesisBlock.Hash, latestBlock.PrevHash, "New block should reference genesis as parent")
-	assert.Equal(t, "test-validator", latestBlock.ValidatorAddress, "New block should be validated by test-validator")
+	assert.Equal(t, testAcc.Address, latestBlock.ValidatorAddress, "New block should be validated by test account")
 
 	// Check if the block was broadcasted
 	assert.Len(t, mockBroadcaster.broadcastedBlocks, 1, "Block should be broadcasted")
@@ -62,7 +70,8 @@ func TestConsensusEngine_CreateBlockNoGenesis(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Try to create a block without genesis - should fail gracefully
 	ce.createNewBlockWithWeatherData(1, make(map[string]*weather.Data))
@@ -92,7 +101,8 @@ func TestConsensusEngine_WeatherServiceError(t *testing.T) {
 	mockWeatherService.shouldError = true
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a new block despite weather service error
 	ce.createNewBlockWithWeatherData(1, make(map[string]*weather.Data))
@@ -101,9 +111,9 @@ func TestConsensusEngine_WeatherServiceError(t *testing.T) {
 	latestBlock := bc.GetLatestBlock()
 	assert.Equal(t, uint64(1), latestBlock.Index, "New block should have index 1 despite weather error")
 
-	// Block data should contain null weather
-	assert.Contains(t, latestBlock.Data, "weather", "Block data should contain weather field")
-	assert.Contains(t, latestBlock.Data, "null", "Block data should contain null weather due to error")
+	// Block data should contain empty weather object
+	assert.Contains(t, latestBlock.Data, "weather", "Block data should contain weather field")  
+	assert.Contains(t, latestBlock.Data, "{}", "Block data should contain empty weather object due to error")
 }
 
 // TestConsensusEngine_NilWeatherService tests block creation with nil weather service
@@ -124,7 +134,8 @@ func TestConsensusEngine_NilWeatherService(t *testing.T) {
 	mockBroadcaster := NewMockBroadcaster()
 
 	// Create consensus engine with nil weather service
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, nil, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, nil, testAcc)
 
 	// Create a new block
 	ce.createNewBlockWithWeatherData(1, make(map[string]*weather.Data))
@@ -133,9 +144,9 @@ func TestConsensusEngine_NilWeatherService(t *testing.T) {
 	latestBlock := bc.GetLatestBlock()
 	assert.Equal(t, uint64(1), latestBlock.Index, "New block should have index 1 with nil weather service")
 
-	// Block data should contain null weather
+	// Block data should contain empty weather object  
 	assert.Contains(t, latestBlock.Data, "weather", "Block data should contain weather field")
-	assert.Contains(t, latestBlock.Data, "null", "Block data should contain null weather")
+	assert.Contains(t, latestBlock.Data, "{}", "Block data should contain empty weather object")
 }
 
 // TestConsensusEngine_JSON_MarshalError tests handling of JSON marshal errors in block creation
@@ -160,7 +171,8 @@ func TestConsensusEngine_JSON_MarshalError(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a new block
 	ce.createNewBlockWithWeatherData(1, make(map[string]*weather.Data))
@@ -192,22 +204,26 @@ func TestConsensusEngine_SignBlock(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	_ = NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a test block
 	testBlock := CreateTestBlock(1, genesisBlock.Hash, "test-validator")
 	testBlock.Signature = []byte{} // Clear signature
 
-	// Sign the block
-	ce.signBlock(testBlock)
+	// Sign the block using a test account
+	signAcc, _ := account.New()
+	err = testBlock.Sign(signAcc)
+	require.NoError(t, err, "Block signing should not fail")
 
 	// Verify signature was added
 	assert.NotEmpty(t, testBlock.Signature, "Block should have signature after signing")
 
-	// Verify signature format (for the prototype signature format)
-	signatureStr := string(testBlock.Signature)
-	expectedPrefix := fmt.Sprintf("signed-%s-by-%s", testBlock.Hash, "test-validator")
-	assert.Equal(t, expectedPrefix, signatureStr, "Signature should have expected format")
+	// Verify signature is proper cryptographic signature (64 bytes for ECDSA)
+	assert.Equal(t, 64, len(testBlock.Signature), "Signature should be 64 bytes for ECDSA")
+
+	// Verify the signature can be verified
+	assert.True(t, testBlock.VerifySignature(), "Block signature should be valid")
 }
 
 // TestConsensusEngine_BlockDataStructure tests the structure of created block data
@@ -229,7 +245,8 @@ func TestConsensusEngine_BlockDataStructure(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a new block
 	slotId := uint64(42)

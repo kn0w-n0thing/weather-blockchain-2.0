@@ -91,13 +91,12 @@ func (ce *Engine) createNewBlockWithWeatherData(slotId uint64, peerWeatherData m
 	}
 
 	newBlock := &block.Block{
-		Index:              newBlockIndex,
-		Timestamp:          timestamp,
-		PrevHash:           latestBlock.Hash,
-		Data:               blockDataStr,
-		ValidatorAddress:   ce.validatorID,
-		Signature:          []byte{},              // Will be set below
-		ValidatorPublicKey: ce.validatorPublicKey, // Store public key
+		Index:            newBlockIndex,
+		Timestamp:        timestamp,
+		PrevHash:         latestBlock.Hash,
+		Data:             blockDataStr,
+		ValidatorAddress: ce.validatorID,
+		Signature:        []byte{}, // Will be set by Sign()
 	}
 
 	// Calculate and store hash first
@@ -106,7 +105,10 @@ func (ce *Engine) createNewBlockWithWeatherData(slotId uint64, peerWeatherData m
 
 	// Sign the block
 	log.Debug("Signing block with validator key")
-	ce.signBlock(newBlock)
+	if err := newBlock.Sign(ce.validatorAccount); err != nil {
+		log.WithError(err).Error("Failed to sign block")
+		return
+	}
 
 	// Add to blockchain
 	log.WithFields(logger.Fields{
@@ -137,47 +139,6 @@ func (ce *Engine) createNewBlockWithWeatherData(slotId uint64, peerWeatherData m
 	}).Info("Successfully created and added new block")
 }
 
-// signBlock signs a block with the validator's private key
-func (ce *Engine) signBlock(b *block.Block) {
-	log.WithFields(logger.Fields{
-		"blockIndex":  b.Index,
-		"blockHash":   b.Hash,
-		"validatorID": ce.validatorID,
-	}).Debug("Signing block with validator's private key")
-
-	// In a production environment, this would use proper crypto libraries
-	// to sign the block hash using the validator's private key
-
-	// For the prototype, we'll use a simple signing method
-	// In a real implementation, you would use code like this:
-
-	/*
-		// Parse private key (assuming ECDSA key in PEM format)
-		block, _ := pem.Decode([]byte(ce.validatorPrivateKey))
-		privateKey, _ := x509.ParseECPrivateKey(block.Bytes)
-
-		// Create a hash of block data (excluding signature)
-		data := fmt.Sprintf("%d%d%s%s%s",
-			b.Index, b.Timestamp, b.PrevHash, b.Data, b.ValidatorAddress)
-		hash := sha256.Sum256([]byte(data))
-
-		// Sign the hash
-		r, s, _ := ecdsa.Sign(rand.Reader, privateKey, hash[:])
-
-		// Convert signature to bytes
-		signature := append(r.Bytes(), s.Bytes()...)
-		b.Signature = signature
-	*/
-
-	// For the prototype, we'll use a simple signature
-	signatureStr := fmt.Sprintf("signed-%s-by-%s", b.Hash, ce.validatorID)
-	b.Signature = []byte(signatureStr)
-
-	log.WithFields(logger.Fields{
-		"blockIndex":    b.Index,
-		"signatureSize": len(b.Signature),
-	}).Debug("Block signing completed")
-}
 
 // extractWeatherDataFromRecentBlocks extracts weather data from recent blocks to aggregate with current block
 func (ce *Engine) extractWeatherDataFromRecentBlocks(currentSlotId uint64) map[string]*weather.Data {

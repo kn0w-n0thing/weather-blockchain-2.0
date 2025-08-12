@@ -29,11 +29,12 @@ func TestConsensusEngine_Init(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Check initialization
 	assert.Equal(t, bc, ce.blockchain, "Blockchain should be properly initialized")
-	assert.Equal(t, "test-validator", ce.validatorID, "Validator ID should be properly set")
+	assert.Equal(t, testAcc.Address, ce.validatorID, "Validator ID should be properly set")
 	assert.Empty(t, ce.pendingBlocks, "Pending blocks map should be empty on initialization")
 	assert.Empty(t, ce.forks, "Forks map should be empty on initialization")
 }
@@ -57,7 +58,8 @@ func TestConsensusEngine_Start(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Start the consensus engine
 	err = ce.Start()
@@ -89,7 +91,8 @@ func TestConsensusEngine_GetForkCount(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Initially should have no forks
 	assert.Equal(t, 0, ce.GetForkCount(), "Should have no forks initially")
@@ -120,7 +123,8 @@ func TestConsensusEngine_GetPendingBlockCount(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Initially should have no pending blocks
 	assert.Equal(t, 0, ce.GetPendingBlockCount(), "Should have no pending blocks initially")
@@ -156,7 +160,8 @@ func TestConsensusEngine_MonitorSlots(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test the monitor logic by calling once directly instead of running the infinite loop
 	// This tests the core logic without dealing with timing issues

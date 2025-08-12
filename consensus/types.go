@@ -3,6 +3,7 @@ package consensus
 import (
 	"sync"
 	"time"
+	"weather-blockchain/account"
 	"weather-blockchain/block"
 	"weather-blockchain/network"
 	"weather-blockchain/weather"
@@ -36,8 +37,7 @@ type Engine struct {
 	networkBroadcaster  network.Broadcaster
 	weatherService      WeatherService
 	validatorID         string
-	validatorPublicKey  []byte
-	validatorPrivateKey []byte                    // In production, use proper key management
+	validatorAccount    *account.Account
 	pendingBlocks       map[string]*block.Block   // Blocks waiting for validation
 	forks               map[uint64][]*block.Block // Competing chains at each height
 	mutex               sync.RWMutex

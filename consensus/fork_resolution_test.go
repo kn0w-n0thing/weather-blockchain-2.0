@@ -31,7 +31,8 @@ func TestConsensusEngine_ForkResolution(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create block 1 in main chain
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -46,8 +47,7 @@ func TestConsensusEngine_ForkResolution(t *testing.T) {
 	assert.Len(t, bc.Blocks, 2, "Blockchain should have 2 blocks (genesis + block1)")
 
 	// Create a competing block 1 for fork (same parent, different content)
-	fork1 := CreateTestBlock(1, genesisBlock.Hash, "validator-2")
-	fork1.Data = "Block 1 Fork" // Make it different
+	fork1 := CreateTestBlockWithData(1, genesisBlock.Hash, "validator-2", "Block 1 Fork")
 
 	// Try to receive fork1 - this should be stored in pending blocks because
 	// it cannot be added directly (conflicts with block1) and creates equal chain length
@@ -95,7 +95,8 @@ func TestConsensusEngine_ResolveForks(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add a block to the main chain
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -138,7 +139,8 @@ func TestConsensusEngine_PerformConsensusReconciliation(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add some blocks to create a more realistic scenario
 	for i := 1; i <= 5; i++ {
@@ -177,7 +179,8 @@ func TestConsensusEngine_RequestChainStatusFromPeers(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Request chain status from peers
 	ce.requestChainStatusFromPeers()
@@ -205,7 +208,8 @@ func TestConsensusEngine_IdentifyAndResolveForks(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Identify and resolve forks
 	ce.identifyAndResolveForks()
@@ -234,7 +238,8 @@ func TestConsensusEngine_PerformChainReorganization(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Perform chain reorganization
 	ce.performChainReorganization()
@@ -267,7 +272,8 @@ func TestConsensusEngine_RequestMissingBlocksForReconciliation(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Request missing blocks for reconciliation
 	ce.requestMissingBlocksForReconciliation()
@@ -295,7 +301,8 @@ func TestConsensusEngine_CalculateChainWork(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test chain work calculation
 	testBlock := CreateTestBlock(5, genesisBlock.Hash, "test-validator")
@@ -324,7 +331,8 @@ func TestConsensusEngine_ValidateEntireChain(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Build a small chain
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -359,7 +367,8 @@ func TestConsensusEngine_FindCommonAncestor(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a chain
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -397,7 +406,8 @@ func TestConsensusEngine_GetBlocksToRollback(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a chain
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -429,7 +439,8 @@ func TestConsensusEngine_GetBlocksToApply(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a chain
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -466,7 +477,8 @@ func TestConsensusEngine_AttemptStateRestore(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create some test blocks
 	originalHead := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -500,7 +512,8 @@ func TestConsensusEngine_BroadcastChainReorganization(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a new head block
 	newHead := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -532,7 +545,8 @@ func TestConsensusEngine_ExecuteChainReorganization(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create blocks for reorganization testing
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -569,7 +583,7 @@ func TestConsensusEngine_ExecuteChainReorganization_NoCurrentHead(t *testing.T) 
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine with empty blockchain
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, createTestAccount())
 
 	// Try to execute reorganization without current head
 	err := ce.executeChainReorganization([]*block.Block{}, []*block.Block{}, nil)
@@ -598,7 +612,8 @@ func TestConsensusEngine_RevertValidatorChanges(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a test block
 	testBlock := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -629,7 +644,8 @@ func TestConsensusEngine_RemoveBlockFromForks(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a test block and add it to forks
 	testBlock := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -664,7 +680,8 @@ func TestConsensusEngine_RevertWeatherDataChanges(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a test block with weather data
 	testBlock := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -695,7 +712,8 @@ func TestConsensusEngine_ApplyValidatorChanges(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a test block
 	testBlock := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -726,7 +744,8 @@ func TestConsensusEngine_ApplyWeatherDataChanges(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a test block with weather data
 	testBlock := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -757,7 +776,8 @@ func TestConsensusEngine_ApplyBlockchainStateChanges(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a test block
 	testBlock := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -788,7 +808,8 @@ func TestConsensusEngine_UpdateConsensusStateAfterReorganization(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a new head block
 	newHead := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -819,7 +840,8 @@ func TestConsensusEngine_CleanupStaleBlocks(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add some stale blocks to pending blocks
 	staleBlock1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -857,7 +879,8 @@ func TestConsensusEngine_ResolveForks_EdgeCases(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test with empty blockchain
 	ce.resolveForks()
@@ -900,7 +923,8 @@ func TestConsensusEngine_PerformChainReorganization_EdgeCases(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a chain with multiple blocks
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -951,7 +975,8 @@ func TestConsensusEngine_RequestChainStatusFromPeers_NoPeers(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Request chain status from peers (should handle no peers gracefully)
 	ce.requestChainStatusFromPeers()
@@ -979,7 +1004,8 @@ func TestConsensusEngine_ValidateEntireChain_InvalidChain(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a block with invalid parent relationship
 	invalidBlock := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1014,7 +1040,8 @@ func TestConsensusEngine_FindCommonAncestor_EdgeCases(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test with same block
 	ancestor := ce.findCommonAncestor(genesisBlock, genesisBlock)
@@ -1041,7 +1068,8 @@ func TestConsensusEngine_IdentifyAndResolveForks_NoLatestBlock(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test identifyAndResolveForks with no latest block
 	ce.identifyAndResolveForks()
@@ -1065,7 +1093,8 @@ func TestConsensusEngine_IdentifyAndResolveForks_SingleHead(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add one block to create a single head
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1095,7 +1124,8 @@ func TestConsensusEngine_IdentifyAndResolveForks_MultipleHeads(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create first chain: genesis -> block1 -> block2
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1157,7 +1187,8 @@ func TestConsensusEngine_IdentifyAndResolveForks_LongerChain(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create shorter main chain
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1199,7 +1230,8 @@ func TestConsensusEngine_PerformChainReorganization_NoMainHead(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test performChainReorganization with no main head
 	ce.performChainReorganization()
@@ -1223,7 +1255,8 @@ func TestConsensusEngine_PerformChainReorganization_SingleHead(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add single block
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1253,7 +1286,8 @@ func TestConsensusEngine_PerformChainReorganization_WorkCalculation(t *testing.T
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add blocks to test work calculation
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1294,7 +1328,8 @@ func TestConsensusEngine_PerformChainReorganization_CompetingChains(t *testing.T
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create main chain
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1336,7 +1371,8 @@ func TestConsensusEngine_PerformChainReorganization_ValidateEntireChain(t *testi
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add blocks for testing
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1369,7 +1405,8 @@ func TestConsensusEngine_PerformChainReorganization_CommonAncestorLogic(t *testi
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create chain: genesis -> block1 -> block2
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1418,7 +1455,8 @@ func TestConsensusEngine_RequestMissingBlocksForReconciliation_WithPeers(t *test
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add blocks to test with
 	var lastBlock *block.Block = genesisBlock
@@ -1458,7 +1496,7 @@ func TestConsensusEngine_RequestMissingBlocksForReconciliation_NonPeerGetter(t *
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, nonPeerBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, nonPeerBroadcaster, mockWeatherService, createTestAccount())
 
 	// Test requestMissingBlocksForReconciliation with non-peer-getter
 	ce.requestMissingBlocksForReconciliation()
@@ -1482,7 +1520,8 @@ func TestConsensusEngine_RequestMissingBlocksForReconciliation_NoLatestBlock(t *
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test requestMissingBlocksForReconciliation with no latest block
 	ce.requestMissingBlocksForReconciliation()
@@ -1509,7 +1548,8 @@ func TestConsensusEngine_RequestMissingBlocksForReconciliation_HighBlockIndex(t 
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add a block with high index (> 100)
 	highIndexBlock := CreateTestBlock(150, genesisBlock.Hash, "validator-1")
@@ -1545,14 +1585,15 @@ func TestConsensusEngine_IdentifyAndResolveForks_FullCoverage(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test complete identifyAndResolveForks function logic
 	log.Info("Identifying and resolving potential forks")
 
 	// Test scenario 1: No latest block (should return early)
 	emptyBc := block.NewBlockchain("./test_data")
-	emptyCe := NewConsensusEngine(emptyBc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	emptyCe := NewConsensusEngine(emptyBc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, createTestAccount())
 	
 	latestBlock := emptyCe.blockchain.GetLatestBlock()
 	if latestBlock == nil {
@@ -1638,14 +1679,15 @@ func TestConsensusEngine_PerformChainReorganization_FullCoverage(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test complete performChainReorganization function logic
 	log.Info("Performing comprehensive chain reorganization")
 
 	// Test scenario 1: No current main head (should return early)
 	emptyBc := block.NewBlockchain("./test_data")
-	emptyCe := NewConsensusEngine(emptyBc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	emptyCe := NewConsensusEngine(emptyBc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, createTestAccount())
 	
 	currentMainHead := emptyCe.blockchain.GetLatestBlock()
 	if currentMainHead == nil {
@@ -1788,7 +1830,8 @@ func TestConsensusEngine_ValidateEntireChain_FullCoverage(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test scenario 1: Valid chain
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1862,7 +1905,7 @@ func TestConsensusEngine_PerformChainReorganization_ExtensiveCoverage(t *testing
 	mockBroadcaster := NewMockBroadcaster()
 	mockWeatherService := NewMockWeatherService()
 
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, createTestAccount())
 
 	// Build a proper fork scenario
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1913,11 +1956,11 @@ func TestConsensusEngine_IdentifyAndResolveForks_ExtensiveCoverage(t *testing.T)
 	mockBroadcaster := NewMockBroadcaster()
 	mockWeatherService := NewMockWeatherService()
 
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, createTestAccount())
 
 	// Test Scenario 1: No latest block (early return)
 	emptyBc := block.NewBlockchain("./test_data")
-	emptyCe := NewConsensusEngine(emptyBc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	emptyCe := NewConsensusEngine(emptyBc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, createTestAccount())
 	
 	latestBlock := emptyCe.blockchain.GetLatestBlock()
 	if latestBlock == nil {
@@ -1977,7 +2020,7 @@ func TestConsensusEngine_RequestChainStatusFromPeers_FullCoverage(t *testing.T) 
 	}
 	mockWeatherService := NewMockWeatherService()
 
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, createTestAccount())
 
 	// Test the complete function logic
 	peerGetter, ok := ce.networkBroadcaster.(interface{ GetPeers() map[string]string })
@@ -1999,7 +2042,7 @@ func TestConsensusEngine_RequestChainStatusFromPeers_FullCoverage(t *testing.T) 
 
 	// Test scenario 2: Non-peer-getter broadcaster
 	nonPeerBroadcaster := &NonPeerGetter{}
-	ce2 := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, nonPeerBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	ce2 := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, nonPeerBroadcaster, mockWeatherService, createTestAccount())
 
 	_, ok2 := ce2.networkBroadcaster.(interface{ GetPeers() map[string]string })
 	assert.False(t, ok2, "Should not be peer getter")
@@ -2025,7 +2068,8 @@ func TestConsensusEngine_CleanupStaleBlocks_FullCoverage(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add some stale blocks to pending
 	staleBlock1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -2079,7 +2123,8 @@ func TestConsensusEngine_ApplyWeatherDataChanges_FullCoverage(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Test scenario 1: Block with weather data
 	blockWithWeather := CreateTestBlock(1, genesisBlock.Hash, "validator-1")

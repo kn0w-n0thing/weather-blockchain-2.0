@@ -1,8 +1,10 @@
 package consensus
 
 import (
+	"crypto/x509"
 	"fmt"
 	"time"
+	"weather-blockchain/account"
 	"weather-blockchain/block"
 	"weather-blockchain/weather"
 )
@@ -190,21 +192,118 @@ func CreateTestGenesisBlock() *block.Block {
 }
 
 // CreateTestBlock creates a test block with specified parameters
-func CreateTestBlock(index uint64, prevHash string, validatorAddr string) *block.Block {
-	testBlock := &block.Block{
-		Index:              index,
-		Timestamp:          time.Now().UnixNano(),
-		PrevHash:           prevHash,
-		Data:               fmt.Sprintf("Test Block %d", index),
-		ValidatorAddress:   validatorAddr,
-		ValidatorPublicKey: []byte("test-pubkey"),
-		Signature:          []byte{},
+func CreateTestBlockWithData(index uint64, prevHash string, validatorAddr string, data string) *block.Block {
+	// Create a test account for signing
+	testAcc, err := account.New()
+	if err != nil {
+		// Fallback to simple signature for tests that don't need real crypto
+		testBlock := &block.Block{
+			Index:              index,
+			Timestamp:          time.Now().UnixNano(),
+			PrevHash:           prevHash,
+			Data:               data,
+			ValidatorAddress:   validatorAddr,
+			ValidatorPublicKey: []byte("test-pubkey"),
+			Signature:          []byte{},
+		}
+		testBlock.StoreHash()
+		
+		// Add a simple signature
+		signatureStr := fmt.Sprintf("signed-%s-by-%s", testBlock.Hash, validatorAddr)
+		testBlock.Signature = []byte(signatureStr)
+		
+		return testBlock
 	}
+
+	// Create block with proper crypto signature
+	testBlock := &block.Block{
+		Index:            index,
+		Timestamp:        time.Now().UnixNano(),
+		PrevHash:         prevHash,
+		Data:             data,
+		ValidatorAddress: validatorAddr,
+		Signature:        []byte{},
+	}
+
+	// Get the public key in proper X.509 PKIX format
+	publicKeyBytes, err := x509.MarshalPKIXPublicKey(testAcc.PublicKey)
+	if err != nil {
+		// Fallback if marshaling fails
+		testBlock.ValidatorPublicKey = []byte("test-pubkey")
+	} else {
+		testBlock.ValidatorPublicKey = publicKeyBytes
+	}
+
 	testBlock.StoreHash()
 	
-	// Add a simple signature
-	signatureStr := fmt.Sprintf("signed-%s-by-%s", testBlock.Hash, validatorAddr)
-	testBlock.Signature = []byte(signatureStr)
+	// Sign the block hash with the test account
+	blockHashBytes := testBlock.CalculateHash()
+	signature, err := testAcc.Sign(blockHashBytes)
+	if err != nil {
+		// Fallback to simple signature if signing fails
+		signatureStr := fmt.Sprintf("signed-%s-by-%s", testBlock.Hash, validatorAddr)
+		testBlock.Signature = []byte(signatureStr)
+	} else {
+		testBlock.Signature = signature
+	}
+	
+	return testBlock
+}
+
+func CreateTestBlock(index uint64, prevHash string, validatorAddr string) *block.Block {
+	// Create a test account for signing
+	testAcc, err := account.New()
+	if err != nil {
+		// Fallback to simple signature for tests that don't need real crypto
+		testBlock := &block.Block{
+			Index:              index,
+			Timestamp:          time.Now().UnixNano(),
+			PrevHash:           prevHash,
+			Data:               fmt.Sprintf("Test Block %d", index),
+			ValidatorAddress:   validatorAddr,
+			ValidatorPublicKey: []byte("test-pubkey"),
+			Signature:          []byte{},
+		}
+		testBlock.StoreHash()
+		
+		// Add a simple signature
+		signatureStr := fmt.Sprintf("signed-%s-by-%s", testBlock.Hash, validatorAddr)
+		testBlock.Signature = []byte(signatureStr)
+		
+		return testBlock
+	}
+
+	// Create block with proper crypto signature
+	testBlock := &block.Block{
+		Index:            index,
+		Timestamp:        time.Now().UnixNano(),
+		PrevHash:         prevHash,
+		Data:             fmt.Sprintf("Test Block %d", index),
+		ValidatorAddress: validatorAddr,
+		Signature:        []byte{},
+	}
+
+	// Get the public key in proper X.509 PKIX format
+	publicKeyBytes, err := x509.MarshalPKIXPublicKey(testAcc.PublicKey)
+	if err != nil {
+		// Fallback if marshaling fails
+		testBlock.ValidatorPublicKey = []byte("test-pubkey")
+	} else {
+		testBlock.ValidatorPublicKey = publicKeyBytes
+	}
+
+	testBlock.StoreHash()
+	
+	// Sign the block hash with the test account
+	blockHashBytes := testBlock.CalculateHash()
+	signature, err := testAcc.Sign(blockHashBytes)
+	if err != nil {
+		// Fallback to simple signature if signing fails
+		signatureStr := fmt.Sprintf("signed-%s-by-%s", testBlock.Hash, validatorAddr)
+		testBlock.Signature = []byte(signatureStr)
+	} else {
+		testBlock.Signature = signature
+	}
 	
 	return testBlock
 }

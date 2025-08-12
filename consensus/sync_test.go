@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 	"time"
+	"weather-blockchain/account"
 	"weather-blockchain/block"
 	"weather-blockchain/logger"
 
@@ -17,6 +18,12 @@ type NonPeerGetter struct{}
 func (n *NonPeerGetter) BroadcastBlock(blockInterface interface{})         {}
 func (n *NonPeerGetter) SendBlockRequest(blockIndex uint64)                {}
 func (n *NonPeerGetter) SendBlockRangeRequest(startIndex, endIndex uint64) {}
+
+// createSyncTestAccount creates a test account for sync tests
+func createSyncTestAccount() *account.Account {
+	acc, _ := account.New()
+	return acc
+}
 
 // TestConsensusEngine_ProcessPendingBlocks tests pending block processing
 func TestConsensusEngine_ProcessPendingBlocks(t *testing.T) {
@@ -37,7 +44,8 @@ func TestConsensusEngine_ProcessPendingBlocks(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add a block to the blockchain first so pending block can connect
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -99,7 +107,8 @@ func TestConsensusEngine_ProcessPendingBlocks_Integration(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add block 1 to the blockchain
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -167,7 +176,8 @@ func TestConsensusEngine_RequestMissingBlocks(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add block 1 to create a gap
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -207,7 +217,8 @@ func TestConsensusEngine_RequestMissingBlocks_NoPeers(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a future block
 	futureBlock := CreateTestBlock(5, "some-missing-parent-hash", "validator-5")
@@ -238,7 +249,8 @@ func TestConsensusEngine_RequestBlockRangeViaNetworkBroadcaster(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Request a range of blocks
 	startIndex := uint64(10)
@@ -272,7 +284,8 @@ func TestConsensusEngine_MonitorNetworkRecovery_Integration(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Start network recovery monitoring
 	done := make(chan bool)
@@ -325,7 +338,8 @@ func TestConsensusEngine_EmptyPendingBlocks(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Verify no pending blocks initially
 	assert.Equal(t, 0, ce.GetPendingBlockCount(), "Should have no pending blocks")
@@ -379,7 +393,8 @@ func TestConsensusEngine_ProcessPendingBlocks_SaveError(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add a block to the blockchain first so pending block can connect
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -438,7 +453,8 @@ func TestConsensusEngine_ProcessPendingBlocks_UnprocessableBlock(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Create a pending block that cannot be added (missing parent)
 	block3 := CreateTestBlock(3, "missing-parent-hash", "validator-3")
@@ -493,7 +509,8 @@ func TestConsensusEngine_MonitorNetworkRecovery_PeerIncrease(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Simulate the network recovery monitor logic directly
 	lastPeerCount := 1
@@ -541,7 +558,8 @@ func TestConsensusEngine_MonitorNetworkRecovery_HighPendingBlocks(t *testing.T) 
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add many pending blocks to simulate high pending count
 	for i := 2; i <= 15; i++ {
@@ -599,7 +617,8 @@ func TestConsensusEngine_MonitorNetworkRecovery_ResetConsecutiveCount(t *testing
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Simulate the consecutive count reset logic
 	consecutiveHighPendingCount := 2
@@ -635,7 +654,8 @@ func TestConsensusEngine_MonitorNetworkRecovery_NonPeerGetter(t *testing.T) {
 	nonPeerBroadcaster := &NonPeerGetter{}
 
 	// Create consensus engine with non-peer-getter broadcaster
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, nonPeerBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, nonPeerBroadcaster, mockWeatherService, testAcc)
 
 	// Test the peer getter type assertion
 	_, ok := ce.networkBroadcaster.(interface{ GetPeers() map[string]string })
@@ -667,7 +687,8 @@ func TestConsensusEngine_ProcessPendingBlocks_WithTicker(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add a block to the blockchain first so pending block can connect
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -761,7 +782,8 @@ func TestConsensusEngine_ProcessPendingBlocks_EmptyProcessing(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Start the processing function simulation (no pending blocks case)
 	done := make(chan bool)
@@ -824,7 +846,8 @@ func TestConsensusEngine_ProcessPendingBlocks_FullCoverage(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add foundation blocks to blockchain
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -889,7 +912,8 @@ func TestConsensusEngine_ProcessPendingBlocks_InfiniteTicker(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add a foundation block
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -980,7 +1004,8 @@ func TestConsensusEngine_ProcessPendingBlocks_SaveError_Coverage(t *testing.T) {
 	mockBroadcaster := NewMockBroadcaster()
 	mockWeatherService := NewMockWeatherService()
 
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add foundation block
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1037,7 +1062,8 @@ func TestConsensusEngine_ProcessPendingBlocks_NoProcessedBlocks(t *testing.T) {
 	mockBroadcaster := NewMockBroadcaster()
 	mockWeatherService := NewMockWeatherService()
 
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add blocks that cannot be processed (invalid parent)
 	invalidBlock1 := CreateTestBlock(2, "invalid-parent-1", "validator-2")
@@ -1097,7 +1123,8 @@ func TestConsensusEngine_MonitorNetworkRecovery_FullCoverage(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add 15 pending blocks to trigger high pending scenario
 	for i := 2; i <= 16; i++ {
@@ -1208,7 +1235,8 @@ func TestConsensusEngine_MonitorNetworkRecovery_InfiniteTicker(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Simulate the infinite ticker behavior with controlled iterations
 	done := make(chan bool)
@@ -1316,7 +1344,8 @@ func TestConsensusEngine_ProcessPendingBlocks_ActualFunction(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add a foundation block
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1388,7 +1417,8 @@ func TestConsensusEngine_MonitorNetworkRecovery_ActualFunction(t *testing.T) {
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add many pending blocks to trigger high pending scenario
 	for i := 2; i <= 15; i++ {
@@ -1464,7 +1494,8 @@ func TestConsensusEngine_ProcessPendingBlocks_ComprehensiveCoverage(t *testing.T
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine with a custom ticker for testing
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add foundation blocks
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1605,7 +1636,8 @@ func TestConsensusEngine_MonitorNetworkRecovery_ComprehensiveCoverage(t *testing
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add many pending blocks to test high pending scenario
 	for i := 2; i <= 15; i++ {
@@ -1730,7 +1762,8 @@ func TestConsensusEngine_ProcessPendingBlocks_RealFunction_95Coverage(t *testing
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add foundation blocks to enable processing
 	block1 := CreateTestBlock(1, genesisBlock.Hash, "validator-1")
@@ -1823,7 +1856,8 @@ func TestConsensusEngine_MonitorNetworkRecovery_RealFunction_95Coverage(t *testi
 	mockWeatherService := NewMockWeatherService()
 
 	// Create consensus engine
-	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, "test-validator", []byte("test-pubkey"), []byte("test-privkey"))
+	testAcc := createSyncTestAccount()
+	ce := NewConsensusEngine(bc, mockTimeSync, mockValidatorSelection, mockBroadcaster, mockWeatherService, testAcc)
 
 	// Add many pending blocks to trigger high pending scenarios
 	for i := 2; i <= 15; i++ {
