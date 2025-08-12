@@ -10,7 +10,7 @@ from PyQt5.QtGui import QFontDatabase
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QScrollArea, QGridLayout, QHBoxLayout
 
 import gpio_controller
-from ui_components import UIComponentFactory
+from ui_components import UIComponentFactory, format_to_one_decimal
 from weather_data import WeatherDataManager
 import resources_rc
 
@@ -364,7 +364,7 @@ class GUI(QWidget):
                 self._update_weather_panel(index, weather)
 
             except Exception as e:
-                self.logger.error(f"Error processing weather entry {i}: {e}")
+                self.logger.error(f"Error processing weather entry: {e}")
 
         self.current_weather_data = weather_list
         self._set_background(self.winner_id)
@@ -379,10 +379,10 @@ class GUI(QWidget):
 
         # Update each label in the panel
         layout.itemAt(1).widget().setText(weather.condition)
-        layout.itemAt(2).widget().setText(f'{weather.temp}°')
-        layout.itemAt(3).widget().setText(f'({weather.real_temp}°)')
-        layout.itemAt(4).widget().setText(f'{weather.humidity}%')
-        layout.itemAt(5).widget().setText(f'{weather.wind_speed}m/s')
+        layout.itemAt(2).widget().setText(f'{format_to_one_decimal(weather.temp)}°')
+        layout.itemAt(3).widget().setText(f'({format_to_one_decimal(weather.real_temp)}°)')
+        layout.itemAt(4).widget().setText(f'{format_to_one_decimal(weather.humidity)}%')
+        layout.itemAt(5).widget().setText(f'{format_to_one_decimal(weather.wind_speed)}m/s')
 
         # Wind direction with icon - replace the label with wind widget
         old_widget = layout.itemAt(6).widget()
@@ -390,7 +390,8 @@ class GUI(QWidget):
         old_widget.deleteLater()
         
         wind_widget = self.ui_factory.create_wind_widget(
-            weather.humidity, weather.wind_speed,
+            format_to_one_decimal(weather.humidity),
+            format_to_one_decimal(weather.wind_speed),
             weather.wind_direction, 0
         )
         wind_widget.setObjectName('CurrentWeather')
@@ -444,6 +445,7 @@ class GUI(QWidget):
         if self.gpio:
             self.gpio.cleanup()
         event.accept()
+
 
 def load_fonts():
     """Load custom fonts from QRC resources"""

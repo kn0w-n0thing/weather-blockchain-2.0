@@ -171,7 +171,7 @@ class UIComponentFactory:
             'PastWeather', [320, 25], Qt.AlignLeft | Qt.AlignVCenter
         )
         temp_label = UIComponentFactory.create_label(
-            f'{weather_data.temp}°  ({weather_data.real_temp}°)',
+            f'{format_to_one_decimal(weather_data.temp)}°  ({format_to_one_decimal(weather_data.real_temp)}°)',
             'PastWeather', [320, 25], Qt.AlignLeft | Qt.AlignVCenter
         )
 
@@ -264,3 +264,11 @@ class UIComponentFactory:
     @staticmethod
     def create_winner_widget() -> BreathingIcon:
         return BreathingIcon(':/icon/winner.png')
+
+
+def format_to_one_decimal(value):
+    """Format a number to one decimal place"""
+    try:
+        return f"{float(value):.1f}"
+    except (ValueError, TypeError):
+        return str(value)
