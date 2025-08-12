@@ -345,6 +345,12 @@ class GUI(QWidget):
                 # Create a copy of the block and set timestamp to top of the hour
                 cleaned_block = block.copy()
                 cleaned_block['time'] = hour_key
+                
+                # Unify all weather data timestamps to match the block timestamp
+                for address, weather_data in cleaned_block['data'].items():
+                    if isinstance(weather_data, dict) and 'timestamp' in weather_data:
+                        weather_data['timestamp'] = hour_key
+                
                 hourly_blocks[hour_key] = cleaned_block
         
         # Sort the cleaned blocks from latest to oldest for display
