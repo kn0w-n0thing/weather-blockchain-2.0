@@ -176,14 +176,15 @@ func TestGetCurrentSlot(t *testing.T) {
 	ts := NewTimeSync(NewMockNetworkManager("test-node"))
 
 	// Create a deterministic genesis time for testing
-	ts.genesisTime = time.Now().Add(-25 * time.Second) // 25 seconds ago
+	// SlotDuration = 10 minutes = 600 seconds
+	ts.genesisTime = time.Now().Add(-25 * time.Minute) // 25 minutes ago (slot 2)
 
-	// Should be in slot 2 (0-11s is slot 0, 12-23s is slot 1, 24+ is slot 2)
+	// Should be in slot 2 (25 minutes / 10 minutes per slot = 2.5, so slot 2)
 	slot := ts.GetCurrentSlot()
 	assert.Equal(t, uint64(2), slot, "Should be in slot 2")
 
 	// Move genesis time to test another scenario
-	ts.genesisTime = time.Now().Add(-5 * time.Second) // 5 seconds ago
+	ts.genesisTime = time.Now().Add(-5 * time.Minute) // 5 minutes ago (slot 0)
 
 	// Should be in slot 0
 	slot = ts.GetCurrentSlot()
@@ -195,10 +196,11 @@ func TestGetCurrentEpoch(t *testing.T) {
 	ts := NewTimeSync(NewMockNetworkManager("test-node"))
 
 	// Create a deterministic genesis time for testing
-	// Set genesis to be 400 seconds ago (33.33 slots, which is 1 epoch and 1.33 slots)
-	ts.genesisTime = time.Now().Add(-400 * time.Second)
+	// SlotsPerEpoch = 32, SlotDuration = 10 minutes
+	// Set genesis to be 400 minutes ago (40 slots, which is 1 epoch and 8 slots)
+	ts.genesisTime = time.Now().Add(-400 * time.Minute)
 
-	// Should be in epoch 1
+	// Should be in epoch 1 (40 slots / 32 slots per epoch = 1.25, so epoch 1)
 	epoch := ts.GetCurrentEpoch()
 	assert.Equal(t, uint64(1), epoch, "Should be in epoch 1")
 }

@@ -76,7 +76,7 @@ func (ce *Engine) monitorSlots() {
 			// Wait until we're halfway through the slot to ensure
 			// we have received any competing blocks
 			slotStart := ce.timeSync.GetSlotStartTime(currentSlot)
-			slotMidpoint := slotStart.Add(6 * time.Second) // Half of 12-second slot
+			slotMidpoint := slotStart.Add(network.SlotDuration / 2) // Half of slot duration
 
 			// Collect weather data from peers during wait period
 			log.WithField("currentSlot", currentSlot).Debug("Collecting weather data from peer blocks")

@@ -11,7 +11,7 @@ import (
 
 const (
 	// SlotDuration is the fixed time allocated to each slot
-	SlotDuration = 12 * time.Second
+	SlotDuration = 10 * time.Minute
 
 	// MaxClockDrift defines the maximum allowed deviation from network time
 	MaxClockDrift = 500 * time.Millisecond
@@ -182,7 +182,8 @@ func (timeSync *TimeSync) GetCurrentSlot() uint64 {
 	defer timeSync.mutex.RUnlock()
 
 	// Calculate elapsed time since genesis
-	networkTime := timeSync.GetNetworkTime()
+	// Use local time + offset directly to avoid deadlock with GetNetworkTime()
+	networkTime := time.Now().Add(timeSync.timeOffset)
 	elapsed := networkTime.Sub(timeSync.genesisTime)
 
 	// Calculate slot number based on elapsed time
@@ -222,7 +223,10 @@ func (timeSync *TimeSync) IsValidatorForCurrentSlot() bool {
 	timeSync.mutex.RLock()
 	defer timeSync.mutex.RUnlock()
 
-	currentSlot := timeSync.GetCurrentSlot()
+	// Calculate current slot directly to avoid deadlock
+	networkTime := time.Now().Add(timeSync.timeOffset)
+	elapsed := networkTime.Sub(timeSync.genesisTime)
+	currentSlot := uint64(elapsed / SlotDuration)
 	slotKey := currentSlot % 10000 // We use modulo to limit map size
 
 	log.WithFields(logger.Fields{

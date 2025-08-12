@@ -20,7 +20,6 @@ const (
 	DefaultPort          = 18790
 	DiscoveryWaitTime    = 10 * time.Second
 	PeerDisplayInterval  = 10 * time.Second
-	SlotDuration         = 10 * time.Minute
 	ValidatorDebugWait   = 2 * time.Second
 	ValidatorSlotsToTest = 10
 )
@@ -345,7 +344,7 @@ func runValidatorDebug(validatorSelection *network.ValidatorSelection, node *net
 
 	// Test next slots
 	fmt.Printf("\n=== Next %d slots validator selection ===\n", ValidatorSlotsToTest)
-	currentSlot := uint64(time.Now().Unix()) / uint64(SlotDuration.Seconds())
+	currentSlot := uint64(time.Now().Unix()) / uint64(network.SlotDuration.Seconds())
 	localCount := 0
 
 	for i := 0; i < ValidatorSlotsToTest; i++ {
