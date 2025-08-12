@@ -213,12 +213,12 @@ class GUI(QWidget):
         self.showFullScreen()
         self.setCursor(Qt.BlankCursor)
 
-    def _refresh_data(self, block_count = 5):
+    def _refresh_data(self, block_count = 40):
         """Refresh weather data from blockchain API"""
         try:
             self.logger.info("Fetching latest weather data from blockchain API")
             
-            # Call /api/blockchain/latest/5 to get the latest 5 weather records
+            # Get the latest weather records of number of block_count
             api_url = f"{self.api_base_url}/api/blockchain/latest/{block_count}"
             
             try:
@@ -240,16 +240,19 @@ class GUI(QWidget):
                 return
 
             self.logger.info(f"Extracted {len(weather_blocks)} weather blocks")
+            cleaned_weather_blocks = self._clean_weather_blocks(weather_blocks)
+            if not cleaned_weather_blocks:
+                self.logger.warning("No weather data after cleaning")
+                return
 
             # Use the latest block for current weather (index 0 is latest)
-            if weather_blocks:
-                self._update_current_weather(weather_blocks[0])
-                
-                # Use blocks 1-4 for history weather (2-5th latest)
-                if len(weather_blocks) > 1:
-                    self._update_history_weather(weather_blocks[1:])
-                else:
-                    self._update_history_weather([])
+            self._update_current_weather(cleaned_weather_blocks[0])
+
+            # Use blocks 1-4 for history weather (2-5th latest)
+            if len(cleaned_weather_blocks) > 1:
+                self._update_history_weather(cleaned_weather_blocks[1:])
+            else:
+                self._update_history_weather([])
 
             # Apply styling and activate GPIO
             if self.winner_id and self.gpio:
@@ -308,6 +311,48 @@ class GUI(QWidget):
             self.logger.error(f"Error extracting weather blocks: {e}")
             return weather_blocks
 
+    def _clean_weather_blocks(self, weather_blocks):
+        """Clean weather blocks by grouping into hourly intervals and selecting earliest record from each hour
+        
+        Args:
+            weather_blocks: List of weather block entries with timestamp and data
+            
+        Returns:
+            List of cleaned weather blocks with one entry per hour, sorted from latest to oldest
+        """
+        if not weather_blocks:
+            return []
+        
+        # Sort by timestamp from earliest to latest to easily find earliest in each hour
+        sorted_blocks = sorted(weather_blocks, key=lambda x: x['time'])
+        
+        # Group by hour and select earliest record from each hour
+        import datetime
+        hourly_blocks = {}
+        
+        for block in sorted_blocks:
+            timestamp = block['time']
+            # Convert nanosecond timestamp to seconds
+            timestamp = timestamp / 1000000000
+            
+            # Convert to datetime and get the hour boundary
+            dt = datetime.datetime.fromtimestamp(timestamp)
+            hour_start = dt.replace(minute=0, second=0, microsecond=0)
+            hour_key = hour_start.timestamp()
+            
+            # Keep the first record for this hour (earliest since we sorted earliest to latest)
+            if hour_key not in hourly_blocks:
+                # Create a copy of the block and set timestamp to top of the hour
+                cleaned_block = block.copy()
+                cleaned_block['time'] = hour_key
+                hourly_blocks[hour_key] = cleaned_block
+        
+        # Sort the cleaned blocks from latest to oldest for display
+        cleaned_blocks = sorted(hourly_blocks.values(), key=lambda x: x['time'], reverse=True)
+        
+        self.logger.info(f"Cleaned {len(weather_blocks)} blocks into {len(cleaned_blocks)} hourly blocks")
+        return cleaned_blocks
+
     def _load_address_mapping(self):
         """Load address to index mapping (hardcoded)"""
         # Hardcoded address to display index mapping
@@ -341,7 +386,7 @@ class GUI(QWidget):
         for address, weather_data in current_entry['data'].items():
             try:
                 index = self._get_index_from_address(address)
-                weather = self.data_manager.parse_weather_entry(weather_data, timestamp)
+                weather = self.data_manager.parse_weather_entry(weather_data, current_entry['time'])
                 weather_list.append(weather)
 
                 self.title_city.setText(self.data_manager.get_display_city(weather.city))

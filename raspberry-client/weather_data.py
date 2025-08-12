@@ -46,6 +46,7 @@ class WeatherDataManager:
                 humidity=data_dict['Hum'],
                 wind_speed=data_dict['wSpeed'],
                 wind_direction=data_dict['wDir'],
+                # unify the timestamps of weather data in one block
                 timestamp=timestamp,
                 weather_id=data_dict.get('Id', 0)
             )
