@@ -9,11 +9,11 @@ class GPIOController:
 
     # GPIO pin mapping for weather conditions
     CONDITION_PINS = {
-        'snow': 6,  # target1
+        'clear': 17,
         'cloudy': 27,
-        'rain': 5,  # bad2
-        'thunder': 22,  # target2
-        'clear': 17,  # bad1
+        'thunder': 22,
+        'rain': 5,
+        'snow': 6,
         'fog': 13
     }
 
