@@ -3,6 +3,7 @@ import logging
 import signal
 import sys
 import faulthandler
+import sqlite3
 
 import requests
 from PyQt5.QtCore import QTimer, Qt
@@ -17,6 +18,8 @@ import resources_rc
 # Constants
 SCREEN_WIDTH = 540
 SCREEN_HEIGHT = 1929
+MAX_WEATHER_RECORDS = 6
+WEATHER_DB_PATH = "weather.db"
 
 # Configure logging
 logging.basicConfig(
@@ -68,17 +71,26 @@ class GUI(QWidget):
         self.address_to_index = {}
         self._load_address_mapping()
 
+        # Initialize database
+        self._init_database()
+
         # Timers
         self.data_timer = QTimer()
+        self.fetch_timer = QTimer()
 
         # Initialize UI
         load_fonts()
         self._setup_ui()
         self._init_window()
 
-        self._refresh_data()
-        # refresh every minute
-        self._start_data_refresh_timer(1 * 60 * 1000)
+        # Initial data fetch and GUI refresh
+        if self._fetch_weather_data():
+            self._refresh_gui_data()
+        
+        # Setup fetch timer (every minute) that only refreshes GUI when database changes
+        self.fetch_timer.setInterval(1 * 60 * 1000)
+        self.fetch_timer.timeout.connect(self._on_fetch_timer)
+        self.fetch_timer.start()
 
         self.logger.info("Weather Display initialization complete")
 
@@ -213,53 +225,159 @@ class GUI(QWidget):
         self.showFullScreen()
         self.setCursor(Qt.BlankCursor)
 
-    def _refresh_data(self, block_count = 40):
-        """Refresh weather data from blockchain API"""
+    def _init_database(self):
+        """Initialize SQLite database for weather data storage"""
+        try:
+            with sqlite3.connect(WEATHER_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS weather_data (
+                        hour_timestamp INTEGER PRIMARY KEY,
+                        weather_json TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                conn.commit()
+                self.logger.info("Database initialized successfully")
+        except sqlite3.Error as e:
+            self.logger.error(f"Database initialization error: {e}")
+
+    def _fetch_weather_data(self, block_count=40):
+        """Fetch weather data from API and store in database"""
         try:
             self.logger.info("Fetching latest weather data from blockchain API")
             
-            # Get the latest weather records of number of block_count
+            # Get the latest weather records
             api_url = f"{self.api_base_url}/api/blockchain/latest/{block_count}"
             
             try:
                 response = requests.get(api_url, timeout=10)
                 response.raise_for_status()
                 api_data = response.json()
-                self.logger.info(f"Successfully fetched data from API: {len(api_data)} nodes")
+                self.logger.info("Successfully fetched data from API")
             except requests.exceptions.RequestException as e:
                 self.logger.error(f"HTTP request failed: {e}")
-                return
+                return False
             except json.JSONDecodeError as e:
                 self.logger.error(f"Failed to parse API response JSON: {e}")
-                return
+                return False
             
-            # Extract weather data from the API response
+            # Extract and clean weather data
             weather_blocks = self._extract_weather_blocks(api_data)
             if not weather_blocks:
                 self.logger.warning("No weather data found in API response")
-                return
+                return False
 
-            self.logger.info(f"Extracted {len(weather_blocks)} weather blocks")
             cleaned_weather_blocks = self._clean_weather_blocks(weather_blocks)
             if not cleaned_weather_blocks:
                 self.logger.warning("No weather data after cleaning")
+                return False
+
+            # Store in database and detect actual changes
+            new_records = 0
+            with sqlite3.connect(WEATHER_DB_PATH) as conn:
+                cursor = conn.cursor()
+                
+                for block in cleaned_weather_blocks:
+                    hour_timestamp = block['time']
+                    weather_json = json.dumps(block)
+                    
+                    try:
+                        # Check if data already exists and is identical
+                        cursor.execute('''
+                            SELECT weather_json FROM weather_data 
+                            WHERE hour_timestamp = ?
+                        ''', (hour_timestamp,))
+                        
+                        existing_row = cursor.fetchone()
+                        
+                        if existing_row is None:
+                            # New record - insert it
+                            cursor.execute('''
+                                INSERT INTO weather_data 
+                                (hour_timestamp, weather_json) 
+                                VALUES (?, ?)
+                            ''', (hour_timestamp, weather_json))
+                            new_records += 1
+                        elif existing_row[0] != weather_json:
+                            # Data changed - update it
+                            cursor.execute('''
+                                UPDATE weather_data 
+                                SET weather_json = ?, created_at = CURRENT_TIMESTAMP
+                                WHERE hour_timestamp = ?
+                            ''', (weather_json, hour_timestamp))
+                            new_records += 1
+                        # If data is identical, do nothing
+                        
+                    except sqlite3.Error as e:
+                        self.logger.error(f"Error inserting weather record: {e}")
+                        continue
+                
+                conn.commit()
+                
+            self.logger.info(f"Stored {new_records} weather records in database")
+            return new_records > 0
+            
+        except Exception as e:
+            self.logger.error(f"Error fetching weather data: {e}", exc_info=True)
+            return False
+
+    def _refresh_gui_data(self):
+        """Refresh GUI with data from database"""
+        try:
+            self.logger.info("Refreshing GUI with latest weather data")
+            
+            # Get latest MAX_WEATHER_RECORDS from database
+            with sqlite3.connect(WEATHER_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT weather_json FROM weather_data 
+                    ORDER BY hour_timestamp DESC 
+                    LIMIT ?
+                ''', (MAX_WEATHER_RECORDS,))
+                
+                rows = cursor.fetchall()
+                
+            if not rows:
+                self.logger.warning("No weather data found in database")
                 return
-
+                
+            # Parse weather blocks from database
+            weather_blocks = []
+            for row in rows:
+                try:
+                    block = json.loads(row[0])
+                    weather_blocks.append(block)
+                except json.JSONDecodeError as e:
+                    self.logger.error(f"Error parsing weather data from database: {e}")
+                    continue
+            
+            if not weather_blocks:
+                self.logger.warning("No valid weather data found")
+                return
+                
             # Use the latest block for current weather (index 0 is latest)
-            self._update_current_weather(cleaned_weather_blocks[0])
+            self._update_current_weather(weather_blocks[0])
 
-            # Use blocks 1-4 for history weather (2-5th latest)
-            if len(cleaned_weather_blocks) > 1:
-                self._update_history_weather(cleaned_weather_blocks[1:])
+            # Use remaining blocks for history weather
+            if len(weather_blocks) > 1:
+                self._update_history_weather(weather_blocks[1:])
             else:
                 self._update_history_weather([])
 
             # Apply styling and activate GPIO
             if self.winner_id and self.gpio:
                 self.gpio.switch_condition(self.winner_id)
+                
+            self.logger.info("GUI refresh completed successfully")
 
         except Exception as e:
-            self.logger.error(f"Error refreshing data: {e}", exc_info=True)
+            self.logger.error(f"Error refreshing GUI data: {e}", exc_info=True)
+
+    def _on_fetch_timer(self):
+        """Timer callback that fetches data and refreshes GUI only if database changed"""
+        if self._fetch_weather_data():
+            self._refresh_gui_data()
 
     def _extract_weather_blocks(self, api_data):
         """Extract weather blocks from blockchain API response"""
@@ -479,14 +597,6 @@ class GUI(QWidget):
         panel.setLayout(layout)
 
         self.past_weather_scroll.setWidget(panel)
-
-    def _start_data_refresh_timer(self, interval):
-        """Start automatic data refresh"""
-        self.logger.info(f"Starting data refresh timer with interval {interval}ms")
-
-        self.data_timer.setInterval(interval)
-        self.data_timer.timeout.connect(self._refresh_data)
-        self.data_timer.start()
 
     def closeEvent(self, event):
         """Clean up on close"""
