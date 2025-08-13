@@ -13,13 +13,15 @@ from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QScrollArea, QGr
 import gpio_controller
 from ui_components import UIComponentFactory, format_to_one_decimal
 from weather_data import WeatherDataManager
+from database_logger import setup_database_logging
 import resources_rc
 
 # Constants
 SCREEN_WIDTH = 540
 SCREEN_HEIGHT = 1929
 MAX_WEATHER_RECORDS = 6
-WEATHER_DB_PATH = "weather.db"
+WEATHER_DB_PATH = "weather_data.db"
+LOGS_DB_PATH = "logs.db"
 
 # Configure logging
 logging.basicConfig(
@@ -73,6 +75,9 @@ class GUI(QWidget):
 
         # Initialize database
         self._init_database()
+        
+        # Setup database logging
+        self.db_logger = setup_database_logging(LOGS_DB_PATH)
 
         # Timers
         self.data_timer = QTimer()
@@ -87,7 +92,7 @@ class GUI(QWidget):
         if self._fetch_weather_data():
             self._refresh_gui_data()
         
-        # Setup fetch timer (every minute) that only refreshes GUI when database changes
+        # Setup fetch timer (every minute) that only refreshes GUI when the database changes
         self.fetch_timer.setInterval(1 * 60 * 1000)
         self.fetch_timer.timeout.connect(self._on_fetch_timer)
         self.fetch_timer.start()
@@ -228,6 +233,7 @@ class GUI(QWidget):
     def _init_database(self):
         """Initialize SQLite database for weather data storage"""
         try:
+            # Initialize weather data database
             with sqlite3.connect(WEATHER_DB_PATH) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
@@ -238,12 +244,13 @@ class GUI(QWidget):
                     )
                 ''')
                 conn.commit()
-                self.logger.info("Database initialized successfully")
+                
+            self.logger.info("Weather database initialized successfully")
         except sqlite3.Error as e:
             self.logger.error(f"Database initialization error: {e}")
 
     def _fetch_weather_data(self, block_count=40):
-        """Fetch weather data from API and store in database"""
+        """Fetch weather data from API and store in the database"""
         try:
             self.logger.info("Fetching latest weather data from blockchain API")
             
@@ -273,7 +280,7 @@ class GUI(QWidget):
                 self.logger.warning("No weather data after cleaning")
                 return False
 
-            # Store in database and detect actual changes
+            # Store in the database and detect actual changes
             new_records = 0
             with sqlite3.connect(WEATHER_DB_PATH) as conn:
                 cursor = conn.cursor()
@@ -323,11 +330,11 @@ class GUI(QWidget):
             return False
 
     def _refresh_gui_data(self):
-        """Refresh GUI with data from database"""
+        """Refresh GUI with data from the database"""
         try:
             self.logger.info("Refreshing GUI with latest weather data")
             
-            # Get latest MAX_WEATHER_RECORDS from database
+            # Get the latest MAX_WEATHER_RECORDS from the database
             with sqlite3.connect(WEATHER_DB_PATH) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
@@ -342,7 +349,7 @@ class GUI(QWidget):
                 self.logger.warning("No weather data found in database")
                 return
                 
-            # Parse weather blocks from database
+            # Parse weather blocks from the database
             weather_blocks = []
             for row in rows:
                 try:
@@ -375,9 +382,10 @@ class GUI(QWidget):
             self.logger.error(f"Error refreshing GUI data: {e}", exc_info=True)
 
     def _on_fetch_timer(self):
-        """Timer callback that fetches data and refreshes GUI only if database changed"""
+        """Timer callback that fetches data and refreshes GUI only if the database changed"""
         if self._fetch_weather_data():
             self._refresh_gui_data()
+    
 
     def _extract_weather_blocks(self, api_data):
         """Extract weather blocks from blockchain API response"""
@@ -430,7 +438,7 @@ class GUI(QWidget):
             return weather_blocks
 
     def _clean_weather_blocks(self, weather_blocks):
-        """Clean weather blocks by grouping into hourly intervals and selecting earliest record from each hour
+        """Clean weather blocks by grouping into hourly intervals and selecting the earliest record from each hour
         
         Args:
             weather_blocks: List of weather block entries with timestamp and data
@@ -444,7 +452,7 @@ class GUI(QWidget):
         # Sort by timestamp from earliest to latest to easily find earliest in each hour
         sorted_blocks = sorted(weather_blocks, key=lambda x: x['time'])
         
-        # Group by hour and select earliest record from each hour
+        # Group by hour and select the earliest record from each hour
         import datetime
         hourly_blocks = {}
         
