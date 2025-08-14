@@ -41,4 +41,8 @@ type Engine struct {
 	pendingBlocks       map[string]*block.Block   // Blocks waiting for validation
 	forks               map[uint64][]*block.Block // Competing chains at each height
 	mutex               sync.RWMutex
+	// Slot-based weather data collection with size management
+	currentSlotWeatherData map[uint64]map[string]*weather.Data // slotID -> validatorID -> weatherData
+	weatherDataMutex       sync.RWMutex                        // Separate mutex for weather data
+	maxSlotHistory         int                                 // Maximum number of slots to keep in memory (default: 3)
 }

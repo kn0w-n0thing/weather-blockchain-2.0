@@ -71,26 +71,37 @@ func NewWeatherService() (*Service, error) {
 		location:   location,
 	}
 
-	// Check if weather data exists, if not fetch immediately
-	_, err = service.GetLatestWeatherData()
+	// Always fetch fresh weather data on startup to ensure availability
+	logger.Logger.Info("Fetching initial weather data on startup")
+	err = service.fetchAndStoreInitialWeatherData()
 	if err != nil {
-		// No weather data exists, fetch immediately
-		logger.Logger.Info("No existing weather data found, fetching initial data")
-		weatherData, fetchErr := api.FetchWeather(service.location)
-		if fetchErr != nil {
-			logger.Logger.WithError(fetchErr).Warn("Failed to fetch initial weather data")
-		} else {
-			if storeErr := service.storeWeatherData(weatherData); storeErr != nil {
-				logger.Logger.WithError(storeErr).Warn("Failed to store initial weather data")
-			} else {
-				logger.Logger.WithField("data", weatherData).Info("Initial weather data fetched and stored successfully")
-			}
-		}
-	} else {
-		logger.Logger.Info("Existing weather data found, skipping initial fetch")
+		logger.Logger.WithError(err).Warn("Failed to fetch initial weather data, will retry later")
 	}
 
 	return service, nil
+}
+
+// fetchAndStoreInitialWeatherData fetches and stores weather data during startup
+func (ws *Service) fetchAndStoreInitialWeatherData() error {
+	// Try primary API first (single attempt for fast startup)
+	weatherData, err := ws.api.FetchWeather(ws.location)
+	if err != nil {
+		logger.Logger.WithError(err).Warn("Primary API failed during startup, trying fallback sources")
+		
+		// Try fallback APIs with single attempts (no retries for fast startup)
+		weatherData, err = ws.tryFallbackAPIs(1, 1)
+		if err != nil {
+			return fmt.Errorf("all weather APIs failed during startup: %w", err)
+		}
+	}
+
+	// Store the weather data
+	if storeErr := ws.storeWeatherData(weatherData); storeErr != nil {
+		return fmt.Errorf("failed to store initial weather data: %w", storeErr)
+	}
+
+	logger.Logger.WithField("data", weatherData).Info("Initial weather data fetched and stored successfully")
+	return nil
 }
 
 // initDatabase initializes the SQLite database

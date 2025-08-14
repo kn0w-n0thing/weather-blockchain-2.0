@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"weather-blockchain/block"
+	"weather-blockchain/weather"
 )
 
 // MessageType represents network message types
@@ -16,6 +17,7 @@ const (
 	MessageTypeBlockRangeResponse
 	MessageTypeHeightRequest
 	MessageTypeHeightResponse
+	MessageTypeWeatherData
 )
 
 // Message represents a network message
@@ -63,4 +65,12 @@ type HeightResponseMessage struct {
 // BlockMessage represents a block being broadcast
 type BlockMessage struct {
 	Block *block.Block `json:"block"`
+}
+
+// WeatherDataMessage represents weather data being broadcast for a specific slot
+type WeatherDataMessage struct {
+	SlotID      uint64        `json:"slotId"`
+	ValidatorID string        `json:"validatorId"`
+	WeatherData *weather.Data `json:"weatherData"`
+	Timestamp   int64         `json:"timestamp"`
 }

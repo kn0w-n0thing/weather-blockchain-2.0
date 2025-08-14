@@ -74,10 +74,18 @@ func (m *MockValidatorSelection) OnValidatorRemoved(validatorID string) {
 
 // MockBroadcaster mocks the network.Broadcaster interface for testing
 type MockBroadcaster struct {
-	broadcastedBlocks []*block.Block
-	blockRequests     []uint64
-	rangeRequests     []struct{ start, end uint64 }
-	peers             map[string]string
+	broadcastedBlocks     []*block.Block
+	blockRequests         []uint64
+	rangeRequests         []struct{ start, end uint64 }
+	peers                 map[string]string
+	weatherDataBroadcasts []WeatherDataBroadcast
+}
+
+// WeatherDataBroadcast represents a weather data broadcast for testing
+type WeatherDataBroadcast struct {
+	SlotID      uint64
+	ValidatorID string
+	Data        *weather.Data
 }
 
 func (m *MockBroadcaster) BroadcastBlock(blockInterface interface{}) {
@@ -96,6 +104,20 @@ func (m *MockBroadcaster) SendBlockRequest(blockIndex uint64) {
 
 func (m *MockBroadcaster) SendBlockRangeRequest(startIndex, endIndex uint64) {
 	m.rangeRequests = append(m.rangeRequests, struct{ start, end uint64 }{startIndex, endIndex})
+}
+
+func (m *MockBroadcaster) BroadcastWeatherData(slotID uint64, validatorID string, data interface{}) {
+	// Type assert to *weather.Data for the actual implementation
+	weatherData, ok := data.(*weather.Data)
+	if !ok {
+		// In tests, we should always get the correct type, but handle gracefully
+		return
+	}
+	m.weatherDataBroadcasts = append(m.weatherDataBroadcasts, WeatherDataBroadcast{
+		SlotID:      slotID,
+		ValidatorID: validatorID,
+		Data:        weatherData,
+	})
 }
 
 func (m *MockBroadcaster) GetPeers() map[string]string {
@@ -159,10 +181,11 @@ func NewMockValidatorSelection() *MockValidatorSelection {
 // NewMockBroadcaster creates a new mock broadcaster for testing
 func NewMockBroadcaster() *MockBroadcaster {
 	return &MockBroadcaster{
-		broadcastedBlocks: make([]*block.Block, 0),
-		blockRequests:     make([]uint64, 0),
-		rangeRequests:     make([]struct{ start, end uint64 }, 0),
-		peers:             make(map[string]string),
+		broadcastedBlocks:     make([]*block.Block, 0),
+		blockRequests:         make([]uint64, 0),
+		rangeRequests:         make([]struct{ start, end uint64 }, 0),
+		peers:                 make(map[string]string),
+		weatherDataBroadcasts: make([]WeatherDataBroadcast, 0),
 	}
 }
 
@@ -207,11 +230,11 @@ func CreateTestBlockWithData(index uint64, prevHash string, validatorAddr string
 			Signature:          []byte{},
 		}
 		testBlock.StoreHash()
-		
+
 		// Add a simple signature
 		signatureStr := fmt.Sprintf("signed-%s-by-%s", testBlock.Hash, validatorAddr)
 		testBlock.Signature = []byte(signatureStr)
-		
+
 		return testBlock
 	}
 
@@ -235,7 +258,7 @@ func CreateTestBlockWithData(index uint64, prevHash string, validatorAddr string
 	}
 
 	testBlock.StoreHash()
-	
+
 	// Sign the block hash with the test account
 	blockHashBytes := testBlock.CalculateHash()
 	signature, err := testAcc.Sign(blockHashBytes)
@@ -246,7 +269,7 @@ func CreateTestBlockWithData(index uint64, prevHash string, validatorAddr string
 	} else {
 		testBlock.Signature = signature
 	}
-	
+
 	return testBlock
 }
 
@@ -265,11 +288,11 @@ func CreateTestBlock(index uint64, prevHash string, validatorAddr string) *block
 			Signature:          []byte{},
 		}
 		testBlock.StoreHash()
-		
+
 		// Add a simple signature
 		signatureStr := fmt.Sprintf("signed-%s-by-%s", testBlock.Hash, validatorAddr)
 		testBlock.Signature = []byte(signatureStr)
-		
+
 		return testBlock
 	}
 
@@ -293,7 +316,7 @@ func CreateTestBlock(index uint64, prevHash string, validatorAddr string) *block
 	}
 
 	testBlock.StoreHash()
-	
+
 	// Sign the block hash with the test account
 	blockHashBytes := testBlock.CalculateHash()
 	signature, err := testAcc.Sign(blockHashBytes)
@@ -304,6 +327,6 @@ func CreateTestBlock(index uint64, prevHash string, validatorAddr string) *block
 	} else {
 		testBlock.Signature = signature
 	}
-	
+
 	return testBlock
 }

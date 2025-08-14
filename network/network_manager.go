@@ -1,6 +1,7 @@
 package network
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/hashicorp/mdns"
@@ -12,6 +13,7 @@ import (
 	"weather-blockchain/block"
 	"weather-blockchain/logger"
 	"weather-blockchain/protocol"
+	"weather-blockchain/weather"
 )
 
 var log = logger.Logger
@@ -54,32 +56,42 @@ type BlockProvider interface {
 	GetBlockCount() int
 }
 
+// WeatherDataHandler interface allows network to forward received weather data
+type WeatherDataHandler interface {
+	OnWeatherDataReceived(slotID uint64, validatorID string, data *weather.Data)
+}
+
 // Broadcaster NetworkBroadcaster interface for broadcasting blocks to the network
 type Broadcaster interface {
 	BroadcastBlock(block interface{})
 	SendBlockRequest(blockIndex uint64)
 	SendBlockRangeRequest(startIndex, endIndex uint64)
+	BroadcastWeatherData(slotID uint64, validatorID string, data interface{})
 }
 
 // Node represents a P2P node and implements NetworkManager interface
 type Node struct {
-	ID              string // Address
-	Port            int
-	listener        net.Listener
-	listenerMutex   sync.RWMutex // Protects listener access
-	Peers           map[string]string // map[id]address
-	peerMutex       sync.RWMutex
-	connections     []net.Conn
-	connectionMutex sync.Mutex
-	stopChan        chan struct{}
-	isRunning       bool
-	server          MDSNService
-	serviceName     string
-	domain          string
-	outgoingBlocks  chan *block.Block // Channel for outgoing blocks
-	incomingBlocks  chan *block.Block // Channel for incoming blocks
-	blockProvider   BlockProvider     // Callback to get blocks when requested
-	blockchain      interface{}       // Reference to blockchain for NetworkManager interface
+	ID                string // Address
+	Port              int
+	listener          net.Listener
+	listenerMutex     sync.RWMutex // Protects listener access
+	Peers             map[string]string // map[id]address
+	peerMutex         sync.RWMutex
+	connections       []net.Conn
+	connectionMutex   sync.Mutex
+	// New fields for proactive weather data connections
+	activeConnections     map[string]net.Conn // map[peerID]connection for weather data
+	activeConnectionMutex sync.RWMutex        // Protects activeConnections map
+	stopChan          chan struct{}
+	isRunning         bool
+	server            MDSNService
+	serviceName       string
+	domain            string
+	outgoingBlocks    chan *block.Block    // Channel for outgoing blocks
+	incomingBlocks    chan *block.Block    // Channel for incoming blocks
+	blockProvider     BlockProvider        // Callback to get blocks when requested
+	blockchain        interface{}          // Reference to blockchain for NetworkManager interface
+	weatherDataHandler WeatherDataHandler   // Handler for received weather data
 }
 
 // String returns a string representation of the Node
@@ -96,13 +108,14 @@ func NewNode(id string, port int) *Node {
 	}).Debug("NewNode: Creating new p2p node")
 
 	node := &Node{
-		ID:             id,
-		Port:           port,
-		Peers:          make(map[string]string),             // ID -> IP address
-		serviceName:    "_weather_blockchain_p2p_node._tcp", // Custom service type
-		domain:         "local.",                            // Standard mDNS domain
-		outgoingBlocks: make(chan *block.Block, channelBufferSize),
-		incomingBlocks: make(chan *block.Block, channelBufferSize),
+		ID:                id,
+		Port:              port,
+		Peers:             make(map[string]string),             // ID -> IP address
+		activeConnections: make(map[string]net.Conn),          // ID -> active TCP connection for weather data
+		serviceName:       "_weather_blockchain_p2p_node._tcp", // Custom service type
+		domain:            "local.",                            // Standard mDNS domain
+		outgoingBlocks:    make(chan *block.Block, channelBufferSize),
+		incomingBlocks:    make(chan *block.Block, channelBufferSize),
 	}
 
 	log.WithFields(logger.Fields{
@@ -278,6 +291,17 @@ func (node *Node) Stop() error {
 	node.connections = nil
 	node.connectionMutex.Unlock()
 	log.Debug("Stop: All connections closed")
+
+	// Close all proactive connections
+	node.activeConnectionMutex.Lock()
+	log.WithField("activeConnectionCount", len(node.activeConnections)).Debug("Stop: Closing all active connections")
+	for peerID, conn := range node.activeConnections {
+		log.WithField("peerID", peerID).Debug("Stop: Closing active connection")
+		conn.Close()
+	}
+	node.activeConnections = make(map[string]net.Conn) // Reset the map
+	node.activeConnectionMutex.Unlock()
+	log.Debug("Stop: All active connections closed")
 
 	// Close the listener safely
 	node.listenerMutex.Lock()
@@ -470,10 +494,12 @@ func (node *Node) discoverNodes() {
 			addr := net.JoinHostPort(finalIP.String(), strconv.Itoa(entry.Port))
 			log.WithField("formattedAddr", addr).Debug("discoverNodes: Formatted network address")
 
-			// Add to known nodes
+			// Add to known nodes and establish proactive connection if new
 			node.peerMutex.Lock()
+			isNewPeer := false
 			if _, exists := node.Peers[nodeID]; !exists {
 				node.Peers[nodeID] = addr
+				isNewPeer = true
 				log.WithFields(logger.Fields{
 					"localNodeID":      node.ID,
 					"discoveredNodeID": nodeID,
@@ -486,6 +512,11 @@ func (node *Node) discoverNodes() {
 				}).Debug("discoverNodes: Node already known, skipping")
 			}
 			node.peerMutex.Unlock()
+
+			// Establish proactive TCP connection for weather data if this is a new peer
+			if isNewPeer {
+				go node.establishProactiveConnection(nodeID, addr)
+			}
 
 		case <-discoveryTimeout:
 			// Discovery timeout reached
@@ -532,6 +563,18 @@ func (node *Node) SetBlockProvider(providerInterface interface{}) {
 	log.Debug("SetBlockProvider: Block provider set for handling block requests")
 }
 
+// SetWeatherDataHandler sets the weather data handler for handling received weather data
+func (node *Node) SetWeatherDataHandler(handlerInterface interface{}) {
+	// Type assert to WeatherDataHandler for the actual implementation
+	handler, ok := handlerInterface.(WeatherDataHandler)
+	if !ok {
+		log.WithField("handlerType", fmt.Sprintf("%T", handlerInterface)).Error("SetWeatherDataHandler: Invalid handler type, expected WeatherDataHandler")
+		return
+	}
+	node.weatherDataHandler = handler
+	log.Debug("SetWeatherDataHandler: Weather data handler set for forwarding received weather data to consensus layer")
+}
+
 // GetIncomingBlocks returns the channel for incoming blocks (Manager interface)
 func (node *Node) GetIncomingBlocks() <-chan interface{} {
 	// Create a new channel that converts *block.Block to interface{}
@@ -575,6 +618,223 @@ func (node *Node) BroadcastBlock(blockInterface interface{}) {
 			"blockHash":  blk.Hash,
 		}).Warn("BroadcastBlock: Outgoing block channel full, couldn't queue block")
 	}
+}
+
+// BroadcastWeatherData broadcasts weather data to all peers for a specific slot with timeout
+func (node *Node) BroadcastWeatherData(slotID uint64, validatorID string, data interface{}) {
+	// Type assert to *weather.Data for the actual implementation
+	weatherData, ok := data.(*weather.Data)
+	if !ok {
+		log.WithField("dataType", fmt.Sprintf("%T", data)).Error("BroadcastWeatherData: Invalid data type, expected *weather.Data")
+		return
+	}
+
+	log.WithFields(logger.Fields{
+		"node":        node.String(),
+		"slotID":      slotID,
+		"validatorID": validatorID,
+	}).Debug("BroadcastWeatherData: Broadcasting weather data to all peers")
+
+	// Get all peers
+	node.peerMutex.RLock()
+	peers := make(map[string]string)
+	for id, addr := range node.Peers {
+		peers[id] = addr
+	}
+	node.peerMutex.RUnlock()
+
+	if len(peers) == 0 {
+		log.Debug("BroadcastWeatherData: No peers available for weather data broadcast")
+		return
+	}
+
+	// Create context with timeout for the entire broadcast operation
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	results := make(chan struct {
+		peerID  string
+		success bool
+		err     error
+	}, len(peers))
+
+	// Send to each peer concurrently with timeout
+	for peerID, peerAddr := range peers {
+		wg.Add(1)
+		go func(id, addr string) {
+			defer wg.Done()
+			
+			log.WithFields(logger.Fields{
+				"peerID":      id,
+				"peerAddr":    addr,
+				"slotID":      slotID,
+				"validatorID": validatorID,
+			}).Debug("BroadcastWeatherData: Sending weather data to peer")
+
+			// Create a done channel for this peer
+			done := make(chan error, 1)
+			
+			// Send weather data in a separate goroutine
+			go func() {
+				done <- node.sendWeatherDataToPeer(addr, slotID, validatorID, weatherData)
+			}()
+
+			// Wait for either completion or context timeout
+			select {
+			case err := <-done:
+				if err != nil {
+					log.WithFields(logger.Fields{
+						"peerID":      id,
+						"peerAddr":    addr,
+						"slotID":      slotID,
+						"validatorID": validatorID,
+						"error":       err,
+					}).Warn("BroadcastWeatherData: Failed to send weather data to peer")
+					results <- struct {
+						peerID  string
+						success bool
+						err     error
+					}{id, false, err}
+				} else {
+					log.WithFields(logger.Fields{
+						"peerID":      id,
+						"slotID":      slotID,
+						"validatorID": validatorID,
+					}).Info("BroadcastWeatherData: Successfully sent weather data to peer")
+					results <- struct {
+						peerID  string
+						success bool
+						err     error
+					}{id, true, nil}
+				}
+			case <-ctx.Done():
+				log.WithFields(logger.Fields{
+					"peerID":      id,
+					"peerAddr":    addr,
+					"slotID":      slotID,
+					"validatorID": validatorID,
+					"timeout":     "10s",
+				}).Warn("BroadcastWeatherData: Timeout sending weather data to peer")
+				results <- struct {
+					peerID  string
+					success bool
+					err     error
+				}{id, false, fmt.Errorf("timeout after 10s")}
+			}
+		}(peerID, peerAddr)
+	}
+
+	// Wait for all goroutines to complete or timeout
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	// Collect results
+	successCount := 0
+	totalPeers := len(peers)
+	
+	for result := range results {
+		if result.success {
+			successCount++
+		}
+	}
+
+	log.WithFields(logger.Fields{
+		"slotID":       slotID,
+		"validatorID":  validatorID,
+		"totalPeers":   totalPeers,
+		"successCount": successCount,
+		"failureCount": totalPeers - successCount,
+	}).Info("BroadcastWeatherData: Weather data broadcast completed")
+}
+
+// sendWeatherDataToPeer sends weather data to a specific peer with timeout
+func (node *Node) sendWeatherDataToPeer(peerAddr string, slotID uint64, validatorID string, weatherData *weather.Data) error {
+	// First, try to find peer ID by address to use proactive connection
+	var peerID string
+	node.peerMutex.RLock()
+	for id, addr := range node.Peers {
+		if addr == peerAddr {
+			peerID = id
+			break
+		}
+	}
+	node.peerMutex.RUnlock()
+
+	var conn net.Conn
+
+	// Try to use proactive connection if available
+	if peerID != "" {
+		if activeConn, exists := node.getActiveConnection(peerID); exists {
+			conn = activeConn
+			log.WithFields(logger.Fields{
+				"peerID":   peerID,
+				"peerAddr": peerAddr,
+			}).Debug("sendWeatherDataToPeer: Using proactive connection")
+		}
+	}
+
+	// Fallback to creating new connection if proactive connection not available
+	if conn == nil {
+		// Set connection timeout for weather data transmission
+		dialer := net.Dialer{
+			Timeout: 5 * time.Second, // 5 second connection timeout
+		}
+		
+		var err error
+		conn, err = dialer.Dial("tcp", peerAddr)
+		if err != nil {
+			return fmt.Errorf("failed to connect to peer %s: %v", peerAddr, err)
+		}
+		// Only close if we created the connection (not using proactive connection)
+		defer conn.Close()
+		log.WithField("peerAddr", peerAddr).Debug("sendWeatherDataToPeer: Using on-demand connection with timeout")
+	}
+
+	// Create weather data message
+	weatherMsg := protocol.WeatherDataMessage{
+		SlotID:      slotID,
+		ValidatorID: validatorID,
+		WeatherData: weatherData,
+		Timestamp:   time.Now().UnixNano(),
+	}
+
+	weatherPayload, err := json.Marshal(weatherMsg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal weather data message: %v", err)
+	}
+
+	protocolMsg := protocol.Message{
+		Type:    protocol.MessageTypeWeatherData,
+		Payload: weatherPayload,
+	}
+
+	msgData, err := json.Marshal(protocolMsg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal protocol message: %v", err)
+	}
+
+	// Set write timeout for weather data transmission
+	err = conn.SetWriteDeadline(time.Now().Add(3 * time.Second))
+	if err != nil {
+		return fmt.Errorf("failed to set write deadline: %v", err)
+	}
+
+	// Send the message
+	_, err = conn.Write(msgData)
+	if err != nil {
+		return fmt.Errorf("failed to send weather data: %v", err)
+	}
+
+	log.WithFields(logger.Fields{
+		"peerAddr":    peerAddr,
+		"slotID":      slotID,
+		"validatorID": validatorID,
+	}).Debug("sendWeatherDataToPeer: Weather data sent successfully")
+
+	return nil
 }
 
 // SendBlockRequest sends a block request to all peers
@@ -1313,6 +1573,40 @@ func (node *Node) handleConnection(conn net.Conn) {
 			// Note: Height responses are typically handled by the requesting client
 			// This case is here for completeness and logging
 
+		case protocol.MessageTypeWeatherData:
+			log.WithField("messageType", "WeatherData").Debug("handleConnection: Processing weather data message")
+
+			// Parse the weather data message
+			var weatherMsg protocol.WeatherDataMessage
+			if err := json.Unmarshal(msg.Payload, &weatherMsg); err != nil {
+				log.WithFields(logger.Fields{
+					"error":       err,
+					"payloadSize": len(msg.Payload),
+				}).Error("handleConnection: Error unmarshalling weather data message")
+				continue
+			}
+
+			log.WithFields(logger.Fields{
+				"slotID":      weatherMsg.SlotID,
+				"validatorID": weatherMsg.ValidatorID,
+				"timestamp":   weatherMsg.Timestamp,
+			}).Debug("handleConnection: Received weather data message")
+
+			// Forward weather data to the consensus layer
+			if node.weatherDataHandler != nil {
+				log.WithFields(logger.Fields{
+					"slotID":      weatherMsg.SlotID,
+					"validatorID": weatherMsg.ValidatorID,
+				}).Info("handleConnection: Forwarding weather data to consensus layer")
+				
+				node.weatherDataHandler.OnWeatherDataReceived(weatherMsg.SlotID, weatherMsg.ValidatorID, weatherMsg.WeatherData)
+			} else {
+				log.WithFields(logger.Fields{
+					"slotID":      weatherMsg.SlotID,
+					"validatorID": weatherMsg.ValidatorID,
+				}).Warn("handleConnection: No weather data handler registered, dropping weather data")
+			}
+
 		default:
 			log.WithField("messageType", msg.Type).Warn("handleConnection: Received unknown message type")
 		}
@@ -1576,3 +1870,157 @@ func (node *Node) SetBlockchain(blockchain interface{}) {
 	node.blockchain = blockchain
 	log.Debug("SetBlockchain: Blockchain reference set for NetworkManager interface")
 }
+
+// establishProactiveConnection establishes and maintains a TCP connection to a peer for weather data
+func (node *Node) establishProactiveConnection(peerID, peerAddr string) {
+	log.WithFields(logger.Fields{
+		"peerID":   peerID,
+		"peerAddr": peerAddr,
+	}).Info("establishProactiveConnection: Attempting to establish proactive connection for weather data")
+
+	// Try to establish connection with retries
+	maxRetries := 3
+	retryInterval := 2 * time.Second
+	
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		log.WithFields(logger.Fields{
+			"peerID":   peerID,
+			"peerAddr": peerAddr,
+			"attempt":  attempt,
+		}).Debug("establishProactiveConnection: Connection attempt")
+
+		conn, err := net.DialTimeout("tcp", peerAddr, 5*time.Second)
+		if err != nil {
+			log.WithFields(logger.Fields{
+				"peerID":   peerID,
+				"peerAddr": peerAddr,
+				"attempt":  attempt,
+				"error":    err,
+			}).Warn("establishProactiveConnection: Failed to establish connection")
+
+			if attempt < maxRetries {
+				log.WithFields(logger.Fields{
+					"peerID":        peerID,
+					"retryInterval": retryInterval,
+				}).Debug("establishProactiveConnection: Retrying connection")
+				time.Sleep(retryInterval)
+				continue
+			} else {
+				log.WithFields(logger.Fields{
+					"peerID":   peerID,
+					"peerAddr": peerAddr,
+				}).Error("establishProactiveConnection: Exhausted all connection attempts")
+				return
+			}
+		}
+
+		// Successfully connected - store the connection
+		node.activeConnectionMutex.Lock()
+		// Close any existing connection for this peer
+		if existingConn, exists := node.activeConnections[peerID]; exists {
+			log.WithField("peerID", peerID).Debug("establishProactiveConnection: Closing existing connection")
+			existingConn.Close()
+		}
+		node.activeConnections[peerID] = conn
+		node.activeConnectionMutex.Unlock()
+
+		log.WithFields(logger.Fields{
+			"peerID":   peerID,
+			"peerAddr": peerAddr,
+		}).Info("establishProactiveConnection: Successfully established proactive connection")
+
+		// Start connection health monitoring
+		go node.monitorConnection(peerID, conn)
+		return
+	}
+}
+
+// monitorConnection monitors the health of a proactive connection
+func (node *Node) monitorConnection(peerID string, conn net.Conn) {
+	log.WithField("peerID", peerID).Debug("monitorConnection: Starting connection health monitoring")
+
+	// Set up keepalive
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(30 * time.Second)
+		log.WithField("peerID", peerID).Debug("monitorConnection: Configured TCP keepalive")
+	}
+
+	// Monitor connection until it's closed or node stops
+	ticker := time.NewTicker(60 * time.Second) // Check every minute
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-node.stopChan:
+			log.WithField("peerID", peerID).Debug("monitorConnection: Node stopping, closing connection")
+			node.closeActiveConnection(peerID)
+			return
+
+		case <-ticker.C:
+			// Test connection health by setting a deadline
+			conn.SetDeadline(time.Now().Add(1 * time.Second))
+			
+			// Simple health check - just try to read with a very short timeout
+			buffer := make([]byte, 1)
+			conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			_, err := conn.Read(buffer)
+			
+			// Reset deadlines
+			conn.SetDeadline(time.Time{})
+			conn.SetReadDeadline(time.Time{})
+
+			// Connection is considered healthy if we get a timeout (no data to read)
+			// or if we successfully read data. Only close on serious errors.
+			if err != nil {
+				if netErr, ok := err.(*net.OpError); ok && netErr.Timeout() {
+					// Timeout is expected when no data is available - connection is healthy
+					log.WithField("peerID", peerID).Debug("monitorConnection: Connection health check passed (timeout)")
+					continue
+				}
+				
+				// Real network error - connection is broken
+				log.WithFields(logger.Fields{
+					"peerID": peerID,
+					"error":  err,
+				}).Warn("monitorConnection: Connection health check failed, reconnecting")
+
+				node.closeActiveConnection(peerID)
+				
+				// Attempt to re-establish connection
+				node.peerMutex.RLock()
+				peerAddr, exists := node.Peers[peerID]
+				node.peerMutex.RUnlock()
+				
+				if exists {
+					go node.establishProactiveConnection(peerID, peerAddr)
+				}
+				return
+			} else {
+				log.WithField("peerID", peerID).Debug("monitorConnection: Connection health check passed")
+			}
+		}
+	}
+}
+
+// closeActiveConnection safely closes and removes an active connection
+func (node *Node) closeActiveConnection(peerID string) {
+	node.activeConnectionMutex.Lock()
+	defer node.activeConnectionMutex.Unlock()
+	
+	if conn, exists := node.activeConnections[peerID]; exists {
+		conn.Close()
+		delete(node.activeConnections, peerID)
+		log.WithField("peerID", peerID).Debug("closeActiveConnection: Closed and removed active connection")
+	}
+}
+
+// getActiveConnection safely retrieves an active connection for weather data
+func (node *Node) getActiveConnection(peerID string) (net.Conn, bool) {
+	node.activeConnectionMutex.RLock()
+	defer node.activeConnectionMutex.RUnlock()
+	
+	conn, exists := node.activeConnections[peerID]
+	return conn, exists
+}
+

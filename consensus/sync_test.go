@@ -18,6 +18,7 @@ type NonPeerGetter struct{}
 func (n *NonPeerGetter) BroadcastBlock(blockInterface interface{})         {}
 func (n *NonPeerGetter) SendBlockRequest(blockIndex uint64)                {}
 func (n *NonPeerGetter) SendBlockRangeRequest(startIndex, endIndex uint64) {}
+func (n *NonPeerGetter) BroadcastWeatherData(slotID uint64, validatorID string, data interface{}) {}
 
 // createSyncTestAccount creates a test account for sync tests
 func createSyncTestAccount() *account.Account {

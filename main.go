@@ -318,6 +318,10 @@ func startServices(config *Config, acc *account.Account, blockchain *block.Block
 	node.SetBlockProvider(blockchain)
 	logger.Logger.Info("Blockchain set as block provider for network")
 
+	// Set up consensus engine as weather data handler for network weather data forwarding
+	node.SetWeatherDataHandler(consensusEngine)
+	logger.Logger.Info("Consensus engine set as weather data handler for network")
+
 	return services, nil
 }
 

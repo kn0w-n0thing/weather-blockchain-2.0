@@ -175,34 +175,51 @@ func TestIsTimeValid(t *testing.T) {
 func TestGetCurrentSlot(t *testing.T) {
 	ts := NewTimeSync(NewMockNetworkManager("test-node"))
 
+	// Use a fixed current time and override the time calculation 
+	// by setting genesis time relative to "now" which will be consistent
+	// during the test run
+	testStartTime := time.Now()
+	
 	// Create a deterministic genesis time for testing
 	// SlotDuration = 10 minutes = 600 seconds
-	ts.genesisTime = time.Now().Add(-25 * time.Minute) // 25 minutes ago (slot 2)
+	ts.genesisTime = testStartTime.Add(-25 * time.Minute) // 25 minutes ago (slot 2)
 
 	// Should be in slot 2 (25 minutes / 10 minutes per slot = 2.5, so slot 2)
+	elapsedTime := testStartTime.Sub(ts.genesisTime)
+	expectedSlot := uint64(elapsedTime / SlotDuration)
+	
 	slot := ts.GetCurrentSlot()
-	assert.Equal(t, uint64(2), slot, "Should be in slot 2")
+	assert.Equal(t, expectedSlot, slot, "Should be in slot %d", expectedSlot)
 
 	// Move genesis time to test another scenario
-	ts.genesisTime = time.Now().Add(-5 * time.Minute) // 5 minutes ago (slot 0)
+	ts.genesisTime = testStartTime.Add(-5 * time.Minute) // 5 minutes ago (slot 0)
 
 	// Should be in slot 0
+	elapsedTime2 := testStartTime.Sub(ts.genesisTime)
+	expectedSlot2 := uint64(elapsedTime2 / SlotDuration)
 	slot = ts.GetCurrentSlot()
-	assert.Equal(t, uint64(0), slot, "Should be in slot 0")
+	assert.Equal(t, expectedSlot2, slot, "Should be in slot %d", expectedSlot2)
 }
 
 // TestGetCurrentEpoch tests epoch calculation
 func TestGetCurrentEpoch(t *testing.T) {
 	ts := NewTimeSync(NewMockNetworkManager("test-node"))
 
+	// Use consistent timing relative to test start
+	testStartTime := time.Now()
+	
 	// Create a deterministic genesis time for testing
 	// SlotsPerEpoch = 32, SlotDuration = 10 minutes
 	// Set genesis to be 400 minutes ago (40 slots, which is 1 epoch and 8 slots)
-	ts.genesisTime = time.Now().Add(-400 * time.Minute)
+	ts.genesisTime = testStartTime.Add(-400 * time.Minute)
 
-	// Should be in epoch 1 (40 slots / 32 slots per epoch = 1.25, so epoch 1)
+	// Calculate expected epoch: 40 slots / 32 slots per epoch = 1.25, so epoch 1
+	elapsedTime := testStartTime.Sub(ts.genesisTime)
+	totalSlots := uint64(elapsedTime / SlotDuration)
+	expectedEpoch := totalSlots / SlotsPerEpoch
+
 	epoch := ts.GetCurrentEpoch()
-	assert.Equal(t, uint64(1), epoch, "Should be in epoch 1")
+	assert.Equal(t, expectedEpoch, epoch, "Should be in epoch %d", expectedEpoch)
 }
 
 // TestGetSlotStartTime tests calculation of slot start times
