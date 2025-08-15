@@ -29,12 +29,6 @@ func main() {
 				Value:   "8080",
 				Usage:   "Port to run the API server on",
 			},
-			&cli.StringFlag{
-				Name:    "log-level",
-				Aliases: []string{"l"},
-				Value:   "info",
-				Usage:   "Log level (debug, info, warn, error)",
-			},
 		},
 		Action: runAPIServer,
 	}
@@ -47,20 +41,15 @@ func main() {
 
 func runAPIServer(c *cli.Context) error {
 	port := c.String("port")
-	logLevel := c.String("log-level")
 
-	// Set log level
-	level, err := logrus.ParseLevel(logLevel)
-	if err != nil {
-		log.WithError(err).Warn("Invalid log level, using info")
-		level = logrus.DebugLevel
+	// Initialize centralized logging system first
+	if err := logger.InitializeLogger("logs"); err != nil {
+		return fmt.Errorf("failed to initialize logger: %v", err)
 	}
-	log.SetLevel(level)
 
 	log.WithFields(logrus.Fields{
-		"port":     port,
-		"logLevel": level,
-		"version":  c.App.Version,
+		"port":    port,
+		"version": c.App.Version,
 	}).Info("Starting Weather Blockchain API Server")
 
 	// Create and start the API server
@@ -85,7 +74,7 @@ func runAPIServer(c *cli.Context) error {
 
 	// Start the server (this blocks)
 	log.WithField("port", port).Info("API server starting...")
-	err = server.Start()
+	err := server.Start()
 	if err != nil {
 		return fmt.Errorf("failed to start API server: %w", err)
 	}
