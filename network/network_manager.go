@@ -884,11 +884,22 @@ func (node *Node) SendBlockRequest(blockIndex uint64) {
 
 // SendBlockRangeRequest sends a block range request to all peers
 func (node *Node) SendBlockRangeRequest(startIndex, endIndex uint64) {
+	// Validate range before processing to prevent underflow
+	if endIndex < startIndex {
+		log.WithFields(logger.Fields{
+			"node":       node.String(),
+			"startIndex": startIndex,
+			"endIndex":   endIndex,
+		}).Error("SendBlockRangeRequest: Invalid block range - endIndex is less than startIndex, skipping request")
+		return
+	}
+
+	blockCount := endIndex - startIndex + 1 // Add 1 for inclusive range
 	log.WithFields(logger.Fields{
 		"node":       node.String(),
 		"startIndex": startIndex,
 		"endIndex":   endIndex,
-		"blockCount": endIndex - startIndex,
+		"blockCount": blockCount,
 	}).Info("SendBlockRangeRequest: Sending block range request to all peers")
 
 	node.peerMutex.RLock()

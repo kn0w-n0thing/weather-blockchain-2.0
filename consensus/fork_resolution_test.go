@@ -1559,14 +1559,16 @@ func TestConsensusEngine_RequestMissingBlocksForReconciliation_HighBlockIndex(t 
 	// Test requestMissingBlocksForReconciliation with high block index
 	ce.requestMissingBlocksForReconciliation()
 
-	// Should calculate startIndex as latestBlock.Index - 100
+	// Should calculate startIndex as latestBlock.Index - MaxReconciliationBlocks
 	assert.GreaterOrEqual(t, len(mockBroadcaster.rangeRequests), 0, "Should make range requests")
 
 	// If requests were made, verify the range
 	if len(mockBroadcaster.rangeRequests) > 0 {
 		req := mockBroadcaster.rangeRequests[len(mockBroadcaster.rangeRequests)-1]
-		assert.Equal(t, uint64(50), req.start, "Should start from latest - 100")
-		assert.Equal(t, uint64(200), req.end, "Should end at latest + 50")
+		expectedStart := uint64(150) - MaxReconciliationBlocks // 150 - 50 = 100
+		expectedEnd := uint64(150) + FutureBlockBuffer         // 150 + 10 = 160
+		assert.Equal(t, expectedStart, req.start, "Should start from latest - MaxReconciliationBlocks")
+		assert.Equal(t, expectedEnd, req.end, "Should end at latest + FutureBlockBuffer")
 	}
 }
 

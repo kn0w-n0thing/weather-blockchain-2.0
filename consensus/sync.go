@@ -128,10 +128,20 @@ func (ce *Engine) requestMissingBlocks(futureBlock *block.Block) {
 
 // requestBlockRangeViaNetworkBroadcaster requests a range of blocks using the network broadcaster interface
 func (ce *Engine) requestBlockRangeViaNetworkBroadcaster(startIndex, endIndex uint64) {
+	// Validate range before processing
+	if endIndex < startIndex {
+		log.WithFields(logger.Fields{
+			"startIndex": startIndex,
+			"endIndex":   endIndex,
+		}).Error("Invalid block range: endIndex is less than startIndex, skipping request")
+		return
+	}
+
+	blockCount := endIndex - startIndex + 1 // Add 1 for inclusive range
 	log.WithFields(logger.Fields{
 		"startIndex": startIndex,
 		"endIndex":   endIndex,
-		"blockCount": endIndex - startIndex,
+		"blockCount": blockCount,
 	}).Info("Requesting block range via network broadcaster")
 
 	// Use the network broadcaster's SendBlockRangeRequest method

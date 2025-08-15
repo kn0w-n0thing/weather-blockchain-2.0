@@ -8,6 +8,13 @@ import (
 	"weather-blockchain/logger"
 )
 
+const (
+	// MaxReconciliationBlocks is the maximum number of blocks to request during reconciliation
+	MaxReconciliationBlocks = 50
+	// FutureBlockBuffer is the number of blocks ahead to request in case peers have newer blocks
+	FutureBlockBuffer = 10
+)
+
 // resolveForks resolves competing chains using the longest chain rule
 func (ce *Engine) resolveForks() {
 	latestBlock := ce.blockchain.GetLatestBlock()
@@ -324,6 +331,7 @@ func (ce *Engine) requestMissingBlocksForReconciliation() {
 	
 	peerGetter, ok := ce.networkBroadcaster.(interface{ GetPeers() map[string]string })
 	if !ok {
+		log.Error("Network broadcaster doesn't support peer access for block requests")
 		return
 	}
 	
@@ -335,22 +343,51 @@ func (ce *Engine) requestMissingBlocksForReconciliation() {
 	
 	latestBlock := ce.blockchain.GetLatestBlock()
 	if latestBlock == nil {
+		log.Error("No latest block available for reconciliation")
 		return
 	}
 	
-	// Request a broader range to ensure we have all recent blocks
-	startIndex := uint64(1)
-	if latestBlock.Index > 100 {
-		startIndex = latestBlock.Index - 100 // Request last 100 blocks
+	// Calculate a reasonable range for synchronization
+	// Don't request future blocks that don't exist yet
+	var startIndex, endIndex uint64
+	
+	if latestBlock.Index > MaxReconciliationBlocks {
+		// Request the last MaxReconciliationBlocks blocks to catch up on recent activity
+		startIndex = latestBlock.Index - MaxReconciliationBlocks
+		endIndex = latestBlock.Index
+	} else if latestBlock.Index == 0 {
+		// Special case: only genesis block exists, request next blocks
+		startIndex = 1
+		endIndex = FutureBlockBuffer
+	} else {
+		// For newer chains, request from next block after genesis to current
+		startIndex = 1
+		endIndex = latestBlock.Index
+	}
+	
+	// Add some buffer for newer blocks that peers might have
+	// But limit it to a reasonable amount (FutureBlockBuffer blocks ahead)
+	maxEndIndex := latestBlock.Index + FutureBlockBuffer
+	
+	// Validate the range to prevent underflow
+	if endIndex < startIndex {
+		log.WithFields(logger.Fields{
+			"startIndex":    startIndex,
+			"endIndex":      endIndex,
+			"latestIndex":   latestBlock.Index,
+		}).Error("Invalid block range detected, skipping reconciliation request")
+		return
 	}
 	
 	log.WithFields(logger.Fields{
-		"startIndex": startIndex,
-		"endIndex":   latestBlock.Index + 50, // Request some future blocks too
-		"peerCount":  len(peers),
+		"startIndex":      startIndex,
+		"endIndex":        maxEndIndex,
+		"latestIndex":     latestBlock.Index,
+		"requestedBlocks": maxEndIndex - startIndex + 1,
+		"peerCount":       len(peers),
 	}).Info("Requesting block range for reconciliation")
 	
-	ce.requestBlockRangeViaNetworkBroadcaster(startIndex, latestBlock.Index + 50)
+	ce.requestBlockRangeViaNetworkBroadcaster(startIndex, maxEndIndex)
 }
 
 // calculateChainWork calculates the cumulative work for a chain ending at the given block
