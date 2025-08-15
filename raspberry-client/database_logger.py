@@ -49,7 +49,7 @@ class DatabaseLogger:
                 cursor.execute('''
                     CREATE TABLE IF NOT EXISTS logs (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        timestamp TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S %z', 'now', 'localtime')),
+                        timestamp TEXT NOT NULL,
                         level TEXT NOT NULL,
                         logger_name TEXT NOT NULL,
                         filename TEXT,
@@ -84,13 +84,15 @@ class DatabaseLogger:
                 
                 # Process the log record
                 try:
+                    import datetime
+                    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S %z')
                     with sqlite3.connect(self.db_path, timeout=1.0) as conn:
                         cursor = conn.cursor()
                         cursor.execute('''
                             INSERT INTO logs 
-                            (level, logger_name, filename, line_number, function_name, message) 
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        ''', record_data)
+                            (timestamp, level, logger_name, filename, line_number, function_name, message) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ''', (timestamp,) + record_data)
                         conn.commit()
                 except Exception:
                     # Silently ignore database errors to prevent recursion
