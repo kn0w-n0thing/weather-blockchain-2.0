@@ -19,6 +19,7 @@ type NodeClientInterface interface {
 	DiscoverNodes() error
 	RequestBlockchainInfo(nodeID string) (*BlockchainInfo, error)
 	RequestBlock(nodeID string, blockIndex uint64) (*block.Block, error)
+	RequestBlockRange(nodeID string, startIndex, endIndex uint64) ([]*block.Block, error)
 }
 
 // NodeClient handles communication with blockchain nodes
@@ -342,4 +343,86 @@ func (nc *NodeClient) RequestBlock(nodeID string, blockIndex uint64) (*block.Blo
 	}).Debug("Received block response from node")
 
 	return blockResp.Block, nil
+}
+
+// RequestBlockRange requests a range of blocks from a specific node
+func (nc *NodeClient) RequestBlockRange(nodeID string, startIndex, endIndex uint64) ([]*block.Block, error) {
+	nc.mutex.RLock()
+	nodeInfo, exists := nc.discoveredNodes[nodeID]
+	nc.mutex.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("node %s not found", nodeID)
+	}
+
+	log.WithFields(logrus.Fields{
+		"nodeID":     nodeID,
+		"startIndex": startIndex,
+		"endIndex":   endIndex,
+		"blockCount": endIndex - startIndex + 1,
+	}).Debug("Requesting block range from node")
+
+	// Connect to the node
+	address := net.JoinHostPort(nodeInfo.Address, nodeInfo.Port)
+	conn, err := net.DialTimeout("tcp", address, NodeConnectionTimeoutSeconds*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to node %s: %w", nodeID, err)
+	}
+	defer conn.Close()
+
+	// Create block range request
+	blockRangeReq := protocol.BlockRangeRequestMessage{
+		StartIndex: startIndex,
+		EndIndex:   endIndex + 1, // Protocol expects exclusive end index
+	}
+
+	reqData, err := json.Marshal(blockRangeReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal block range request: %w", err)
+	}
+
+	msg := protocol.Message{
+		Type:    protocol.MessageTypeBlockRangeRequest,
+		Payload: reqData,
+	}
+
+	msgData, err := json.Marshal(msg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	// Send request
+	_, err = conn.Write(msgData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send range request to node %s: %w", nodeID, err)
+	}
+
+	// Read response with timeout
+	conn.SetReadDeadline(time.Now().Add(NodeResponseTimeoutSeconds * time.Second))
+	decoder := json.NewDecoder(conn)
+
+	var response protocol.Message
+	err = decoder.Decode(&response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read range response from node %s: %w", nodeID, err)
+	}
+
+	if response.Type != protocol.MessageTypeBlockRangeResponse {
+		return nil, fmt.Errorf("unexpected response type from node %s", nodeID)
+	}
+
+	var blockRangeResp protocol.BlockRangeResponseMessage
+	err = json.Unmarshal(response.Payload, &blockRangeResp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal block range response: %w", err)
+	}
+
+	log.WithFields(logrus.Fields{
+		"nodeID":      nodeID,
+		"startIndex":  startIndex,
+		"endIndex":    endIndex,
+		"blocksCount": len(blockRangeResp.Blocks),
+	}).Debug("Received block range response from node")
+
+	return blockRangeResp.Blocks, nil
 }

@@ -16,6 +16,16 @@ import (
 
 var log = logger.Logger
 
+const (
+	// API request timeout constants
+	APIRequestTimeoutSeconds     = 6  // Maximum time to wait for all block range requests
+	NodeConnectionTimeoutSeconds = 3  // Connection timeout for individual node requests
+	NodeResponseTimeoutSeconds   = 5  // Response timeout for individual node requests
+	
+	// API limits
+	MaxBlocksPerRequest = 100 // Maximum number of blocks that can be requested at once
+)
+
 // Server represents the API server
 type Server struct {
 	port       string
@@ -80,6 +90,9 @@ func (s *Server) Start() error {
 	s.httpServer = &http.Server{
 		Addr:    ":" + s.port,
 		Handler: s.corsMiddleware(s.loggingMiddleware(mux)),
+		ReadTimeout:  30 * time.Second, // Prevent slow client attacks
+		WriteTimeout: 30 * time.Second, // Prevent slow responses from hanging
+		IdleTimeout:  60 * time.Second, // Connection keep-alive timeout
 	}
 
 	log.WithFields(logrus.Fields{
@@ -145,13 +158,26 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// writeJSON writes a JSON response
+// writeJSON writes a JSON response with improved error handling
 func (s *Server) writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
 
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.WithError(err).Error("Failed to encode JSON response")
+	// First encode to detect any JSON serialization issues
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		log.WithError(err).Error("Failed to marshal JSON data")
+		// Try to write a simple error response instead
+		errorResponse := Response{Success: false, Error: "Internal JSON serialization error"}
+		if errorData, marshalErr := json.Marshal(errorResponse); marshalErr == nil {
+			w.Write(errorData)
+		}
+		return
+	}
+
+	// Write the marshaled JSON data
+	if _, err := w.Write(jsonData); err != nil {
+		log.WithError(err).Error("Failed to write JSON response - client may have disconnected")
 	}
 }
 
@@ -619,9 +645,9 @@ func (s *Server) handleLatestBlocks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if n > 100 {
+	if n > MaxBlocksPerRequest {
 		log.WithField("requestedBlocks", n).Warn("Requested block count exceeds maximum")
-		s.writeError(w, http.StatusBadRequest, "Number of blocks cannot exceed 100")
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("Number of blocks cannot exceed %d", MaxBlocksPerRequest))
 		return
 	}
 
@@ -701,48 +727,88 @@ func (s *Server) getConsensusBlocks(nodes []NodeInfo, n int) ([]*block.Block, *C
 		"blocksToGet":     int(heightInfo.consensusHeight - startIndex + 1),
 	}).Debug("Calculated block range for consensus retrieval")
 
-	// Collect blocks from all nodes for each index
+	// Collect blocks from all nodes using parallel block range requests for better performance
 	nodeBlockData := make(map[string]map[uint64]*block.Block) // nodeID -> index -> block
 	nodeErrors := make(map[string][]string)
 
+	// Use goroutines for parallel range requests to dramatically improve performance
+	type rangeResult struct {
+		nodeID string
+		blocks []*block.Block
+		err    error
+	}
+	
+	resultChan := make(chan rangeResult, len(nodes))
+	
 	for _, node := range nodes {
 		nodeID := node.NodeID
 		nodeBlockData[nodeID] = make(map[uint64]*block.Block)
 
-		log.WithField("nodeID", nodeID).Debug("Requesting blocks from node")
-
-		// Request each block in the range
-		for index := startIndex; index <= heightInfo.consensusHeight; index++ {
-			block, err := s.nodeClient.RequestBlock(nodeID, index)
-			if err != nil {
+		// Launch goroutine for parallel block range request
+		go func(nID string) {
+			log.WithField("nodeID", nID).Debug("Requesting block range from node")
+			
+			blocks, err := s.nodeClient.RequestBlockRange(nID, startIndex, heightInfo.consensusHeight)
+			resultChan <- rangeResult{
+				nodeID: nID,
+				blocks: blocks,
+				err:    err,
+			}
+		}(nodeID)
+	}
+	
+	// Collect results from all nodes with timeout
+	timeout := time.After(APIRequestTimeoutSeconds * time.Second)
+	nodesCompleted := 0
+	
+	for nodesCompleted < len(nodes) {
+		select {
+		case result := <-resultChan:
+			nodesCompleted++
+			
+			if result.err != nil {
 				log.WithFields(logrus.Fields{
-					"nodeID": nodeID,
-					"index":  index,
-					"error":  err,
-				}).Warn("Failed to get block from node")
-
-				if nodeErrors[nodeID] == nil {
-					nodeErrors[nodeID] = make([]string, 0)
+					"nodeID": result.nodeID,
+					"error":  result.err,
+				}).Warn("Failed to get block range from node")
+				
+				nodeErrors[result.nodeID] = []string{fmt.Sprintf("range request failed: %v", result.err)}
+			} else {
+				log.WithFields(logrus.Fields{
+					"nodeID":      result.nodeID,
+					"blocksCount": len(result.blocks),
+				}).Debug("Received block range from node")
+				
+				// Process received blocks
+				for _, blockData := range result.blocks {
+					if blockData != nil && blockData.Index >= startIndex && blockData.Index <= heightInfo.consensusHeight {
+						nodeBlockData[result.nodeID][blockData.Index] = blockData
+						
+						// Track block selections for consensus
+						if consensusInfo.BlockSelections[blockData.Index] == nil {
+							consensusInfo.BlockSelections[blockData.Index] = make(map[string]int)
+						}
+						consensusInfo.BlockSelections[blockData.Index][blockData.Hash]++
+					}
 				}
-				nodeErrors[nodeID] = append(nodeErrors[nodeID], fmt.Sprintf("index %d: %v", index, err))
-				continue
-			}
-
-			if block != nil {
-				nodeBlockData[nodeID][index] = block
-
-				// Track block selections for consensus
-				if consensusInfo.BlockSelections[index] == nil {
-					consensusInfo.BlockSelections[index] = make(map[string]int)
+				
+				// Mark node as successfully responded if no errors
+				if len(nodeErrors[result.nodeID]) == 0 {
+					consensusInfo.NodesResponded++
 				}
-				consensusInfo.BlockSelections[index][block.Hash]++
 			}
-		}
-
-		if len(nodeErrors[nodeID]) == 0 {
-			consensusInfo.NodesResponded++
+			
+		case <-timeout:
+			log.WithFields(logrus.Fields{
+				"timeoutSeconds":  APIRequestTimeoutSeconds,
+				"completedNodes":  nodesCompleted,
+				"totalNodes":      len(nodes),
+			}).Warn("Timeout waiting for block range requests, proceeding with available data")
+			goto processResults
 		}
 	}
+	
+	processResults:
 
 	log.WithFields(logrus.Fields{
 		"nodesResponded": consensusInfo.NodesResponded,

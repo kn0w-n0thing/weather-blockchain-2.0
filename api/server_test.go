@@ -46,6 +46,14 @@ func (m *MockNodeClient) RequestBlock(nodeID string, blockIndex uint64) (*block.
 	return args.Get(0).(*block.Block), args.Error(1)
 }
 
+func (m *MockNodeClient) RequestBlockRange(nodeID string, startIndex, endIndex uint64) ([]*block.Block, error) {
+	args := m.Called(nodeID, startIndex, endIndex)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*block.Block), args.Error(1)
+}
+
 // Helper function to create test blocks
 func createTestBlock(index uint64, hash string, timestamp int64) *block.Block {
 	return &block.Block{
