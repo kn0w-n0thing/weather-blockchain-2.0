@@ -92,8 +92,8 @@ class GUI(QWidget):
         if self._fetch_weather_data():
             self._refresh_gui_data()
         
-        # Setup fetch timer (every minute) that only refreshes GUI when the database changes
-        self.fetch_timer.setInterval(1 * 60 * 1000)
+        # Setup fetch timer (every 5 minutes) that only refreshes GUI when the database changes
+        self.fetch_timer.setInterval(5 * 60 * 1000)
         self.fetch_timer.timeout.connect(self._on_fetch_timer)
         self.fetch_timer.start()
 
