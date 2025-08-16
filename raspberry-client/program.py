@@ -258,7 +258,7 @@ class GUI(QWidget):
             api_url = f"{self.api_base_url}/api/blockchain/latest/{block_count}"
             
             try:
-                response = requests.get(api_url, timeout=10)
+                response = requests.get(api_url, timeout=30)
                 response.raise_for_status()
                 api_data = response.json()
                 self.logger.info("Successfully fetched data from API")
