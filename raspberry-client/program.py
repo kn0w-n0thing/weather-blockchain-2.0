@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import signal
@@ -53,13 +54,14 @@ def setup_signal_handling():
 
 
 class GUI(QWidget):
-    def __init__(self, project_dir, api_base_url="http://localhost:8080"):
+    def __init__(self, project_dir, api_base_url="http://localhost:8080", fullscreen=True):
         super().__init__()
         self.logger = logging.getLogger(__name__)
         self.gpio = gpio_controller.GPIOController()
 
         self.project_dir = project_dir
         self.api_base_url = api_base_url
+        self.fullscreen = fullscreen
 
         self.data_manager = WeatherDataManager()
         self.ui_factory = UIComponentFactory()
@@ -227,7 +229,8 @@ class GUI(QWidget):
         """Initialize window properties"""
         self.logger.info("Initializing window properties")
         self.show()
-        self.showFullScreen()
+        if self.fullscreen:
+            self.showFullScreen()
         self.setCursor(Qt.BlankCursor)
 
     def _init_database(self):
@@ -657,10 +660,14 @@ def load_stylesheet(app, stylesheet_path):
         logger.error(f"Error loading stylesheet: {e}")
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Weather Display Application')
+    parser.add_argument('--fullscreen', action='store_true', 
+                       help='Run the application in full screen mode')
+    args = parser.parse_args()
+    
     application = QApplication(sys.argv)
     load_stylesheet(application, 'style.qss')
-    window = GUI("./")
+    window = GUI("./", fullscreen=args.fullscreen)
     window.show()
-    # window.showFullScreen()
     timer = setup_signal_handling()
     sys.exit(application.exec_())
