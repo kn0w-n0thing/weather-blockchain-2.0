@@ -13,6 +13,8 @@ const (
 	MaxReconciliationBlocks = 50
 	// FutureBlockBuffer is the number of blocks ahead to request in case peers have newer blocks
 	FutureBlockBuffer = 10
+	// EmergencySyncThreshold is the minimum height difference to trigger emergency sync
+	EmergencySyncThreshold = 6
 )
 
 // resolveForks resolves competing chains using the longest chain rule
@@ -118,19 +120,26 @@ func (ce *Engine) performConsensusReconciliation() {
 	ce.mutex.Lock()
 	defer ce.mutex.Unlock()
 	
-	// Step 1: Request chain information from all peers
+	// Step 1: Check if peers have significantly longer chains and perform emergency sync if needed
+	if ce.detectAndHandleChainHeightGap() {
+		log.Info("Emergency chain synchronization completed, restarting reconciliation")
+		// Restart reconciliation after emergency sync
+		time.Sleep(2 * time.Second)
+	}
+	
+	// Step 2: Request chain information from all peers
 	ce.requestChainStatusFromPeers()
 	
-	// Step 2: Wait for responses and collect chain information
+	// Step 3: Wait for responses and collect chain information
 	time.Sleep(5 * time.Second) // Allow time for responses
 	
-	// Step 3: Identify and resolve potential forks
+	// Step 4: Identify and resolve potential forks
 	ce.identifyAndResolveForks()
 	
-	// Step 4: Perform chain reorganization if needed
+	// Step 5: Perform chain reorganization if needed
 	ce.performChainReorganization()
 	
-	// Step 5: Request missing blocks to fill gaps
+	// Step 6: Request missing blocks to fill gaps
 	ce.requestMissingBlocksForReconciliation()
 	
 	log.Info("Consensus reconciliation process completed")
@@ -909,6 +918,189 @@ func (ce *Engine) updateConsensusStateAfterReorganization(newHead *block.Block) 
 		"pendingBlocks": len(ce.pendingBlocks),
 		"forkCount":     len(ce.forks),
 	}).Debug("Consensus state updated after reorganization")
+}
+
+// detectAndHandleChainHeightGap detects if peers have significantly longer chains and triggers emergency sync
+func (ce *Engine) detectAndHandleChainHeightGap() bool {
+	log.Info("Detecting chain height gaps with peers for emergency synchronization")
+	
+	peerGetter, ok := ce.networkBroadcaster.(interface{ GetPeers() map[string]string })
+	if !ok {
+		log.Error("Cannot access peers for chain height gap detection")
+		return false
+	}
+	
+	peers := peerGetter.GetPeers()
+	if len(peers) == 0 {
+		log.Warn("No peers available for chain height gap detection")
+		return false
+	}
+	
+	latestBlock := ce.blockchain.GetLatestBlock()
+	if latestBlock == nil {
+		log.Error("No latest block available for chain height comparison")
+		return false
+	}
+	
+	localHeight := latestBlock.Index
+	maxPeerHeight := uint64(0)
+	longerChainFound := false
+	
+	log.WithFields(logger.Fields{
+		"localHeight": localHeight,
+		"peerCount":   len(peers),
+	}).Info("Checking peer chain heights")
+	
+	// Request chain status from all peers to detect height gaps
+	for peerID, peerAddr := range peers {
+		log.WithFields(logger.Fields{
+			"peerID":   peerID,
+			"peerAddr": peerAddr,
+		}).Debug("Requesting chain status from peer")
+		
+		// Create a simple chain status request - in a real implementation
+		// this would use the network client to request peer's chain height
+		if chainRequester, ok := ce.networkBroadcaster.(interface{ 
+			RequestPeerChainStatus(string) (uint64, string, error) 
+		}); ok {
+			peerHeight, peerHeadHash, err := chainRequester.RequestPeerChainStatus(peerID)
+			if err != nil {
+				log.WithError(err).WithField("peerID", peerID).Warn("Failed to get chain status from peer")
+				continue
+			}
+			
+			log.WithFields(logger.Fields{
+				"peerID":     peerID,
+				"peerHeight": peerHeight,
+				"peerHead":   peerHeadHash,
+				"heightGap":  int64(peerHeight) - int64(localHeight),
+			}).Debug("Received peer chain status")
+			
+			if peerHeight > maxPeerHeight {
+				maxPeerHeight = peerHeight
+			}
+			
+			// Check if this peer has a significantly longer chain
+			if peerHeight > localHeight + EmergencySyncThreshold {
+				log.WithFields(logger.Fields{
+					"peerID":      peerID,
+					"peerHeight":  peerHeight,
+					"localHeight": localHeight,
+					"heightGap":   peerHeight - localHeight,
+					"threshold":   EmergencySyncThreshold,
+				}).Warn("Peer has significantly longer chain, emergency sync needed")
+				
+				longerChainFound = true
+			}
+		}
+	}
+	
+	if !longerChainFound {
+		log.WithFields(logger.Fields{
+			"localHeight":   localHeight,
+			"maxPeerHeight": maxPeerHeight,
+			"threshold":     EmergencySyncThreshold,
+		}).Info("No significant chain height gap detected")
+		return false
+	}
+	
+	// Emergency synchronization needed
+	log.WithFields(logger.Fields{
+		"localHeight":   localHeight,
+		"maxPeerHeight": maxPeerHeight,
+		"heightGap":     maxPeerHeight - localHeight,
+	}).Warn("Emergency chain synchronization required due to significant height gap")
+	
+	// Trigger emergency synchronization
+	return ce.performEmergencyChainSync(maxPeerHeight)
+}
+
+// performEmergencyChainSync performs emergency chain synchronization when peers have much longer chains
+func (ce *Engine) performEmergencyChainSync(targetHeight uint64) bool {
+	log.WithField("targetHeight", targetHeight).Info("Starting emergency chain synchronization")
+	
+	latestBlock := ce.blockchain.GetLatestBlock()
+	if latestBlock == nil {
+		log.Error("No latest block available for emergency sync")
+		return false
+	}
+	
+	localHeight := latestBlock.Index
+	blocksToSync := targetHeight - localHeight
+	
+	log.WithFields(logger.Fields{
+		"localHeight":  localHeight,
+		"targetHeight": targetHeight,
+		"blocksToSync": blocksToSync,
+	}).Info("Calculating emergency sync requirements")
+	
+	// Request missing blocks from peers in batches
+	batchSize := uint64(20) // Reasonable batch size for emergency sync
+	syncedBlocks := uint64(0)
+	
+	for startIndex := localHeight + 1; startIndex <= targetHeight; startIndex += batchSize {
+		endIndex := startIndex + batchSize - 1
+		if endIndex > targetHeight {
+			endIndex = targetHeight
+		}
+		
+		log.WithFields(logger.Fields{
+			"startIndex": startIndex,
+			"endIndex":   endIndex,
+			"batchSize":  endIndex - startIndex + 1,
+			"progress":   float64(syncedBlocks) / float64(blocksToSync) * 100,
+		}).Info("Requesting emergency sync batch")
+		
+		// Request this batch of blocks from peers
+		ce.requestBlockRangeViaNetworkBroadcaster(startIndex, endIndex)
+		
+		// Allow time for blocks to be received and processed
+		time.Sleep(3 * time.Second)
+		
+		// Check if we successfully received blocks in this batch
+		newLatestBlock := ce.blockchain.GetLatestBlock()
+		if newLatestBlock != nil && newLatestBlock.Index >= endIndex {
+			syncedBlocks = newLatestBlock.Index - localHeight
+			log.WithFields(logger.Fields{
+				"syncedBlocks": syncedBlocks,
+				"newHeight":    newLatestBlock.Index,
+				"progress":     float64(syncedBlocks) / float64(blocksToSync) * 100,
+			}).Info("Emergency sync batch completed successfully")
+		} else {
+			log.WithFields(logger.Fields{
+				"expectedEndIndex": endIndex,
+				"currentHeight":    newLatestBlock.Index,
+			}).Warn("Emergency sync batch may have failed or is still processing")
+			
+			// Give additional time for processing
+			time.Sleep(2 * time.Second)
+		}
+	}
+	
+	// Check final sync status
+	finalLatestBlock := ce.blockchain.GetLatestBlock()
+	finalHeight := uint64(0)
+	if finalLatestBlock != nil {
+		finalHeight = finalLatestBlock.Index
+	}
+	
+	syncSuccess := finalHeight >= targetHeight - 5 // Allow small tolerance
+	
+	log.WithFields(logger.Fields{
+		"initialHeight": localHeight,
+		"finalHeight":   finalHeight,
+		"targetHeight":  targetHeight,
+		"syncedBlocks":  finalHeight - localHeight,
+		"syncSuccess":   syncSuccess,
+	}).Info("Emergency chain synchronization completed")
+	
+	if syncSuccess {
+		log.Info("Emergency synchronization successful - chain is now up to date")
+		return true
+	} else {
+		log.Warn("Emergency synchronization partially failed - some blocks may still be missing")
+		return false
+	}
 }
 
 // cleanupStaleBlocks removes pending blocks that are now invalid after reorganization
