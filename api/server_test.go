@@ -224,15 +224,15 @@ func TestServer_getConsensusBlocks_Success(t *testing.T) {
 		LatestHash:  "hash-4",
 	}, nil)
 	
-	// Mock block requests for latest 2 blocks (indices 3 and 4)
+	// Mock block range requests for latest 2 blocks (indices 3 and 4)
 	// All nodes return the same blocks (perfect consensus)
 	block3 := createTestBlock(3, "hash-3", 3000)
 	block4 := createTestBlock(4, "hash-4", 4000)
+	expectedBlocks := []*block.Block{block3, block4}
 	
 	for i := 1; i <= 3; i++ {
 		nodeID := fmt.Sprintf("node-%d", i)
-		mockClient.On("RequestBlock", nodeID, uint64(3)).Return(block3, nil)
-		mockClient.On("RequestBlock", nodeID, uint64(4)).Return(block4, nil)
+		mockClient.On("RequestBlockRange", nodeID, uint64(3), uint64(4)).Return(expectedBlocks, nil)
 	}
 	
 	blocks, consensusInfo, err := server.getConsensusBlocks(nodes, 2)
@@ -272,13 +272,13 @@ func TestServer_getConsensusBlocks_PartialConsensus(t *testing.T) {
 		LatestHash:  "hash-2",
 	}, nil)
 	
-	// Mock block requests where nodes have different blocks at index 2
+	// Mock block range requests where nodes have different blocks at index 2
 	block2a := createTestBlock(2, "hash-2a", 2000)
 	block2b := createTestBlock(2, "hash-2b", 2000)
 	
-	mockClient.On("RequestBlock", "node-1", uint64(2)).Return(block2a, nil)
-	mockClient.On("RequestBlock", "node-2", uint64(2)).Return(block2a, nil) // Same as node-1
-	mockClient.On("RequestBlock", "node-3", uint64(2)).Return(block2b, nil) // Different
+	mockClient.On("RequestBlockRange", "node-1", uint64(2), uint64(2)).Return([]*block.Block{block2a}, nil)
+	mockClient.On("RequestBlockRange", "node-2", uint64(2), uint64(2)).Return([]*block.Block{block2a}, nil) // Same as node-1
+	mockClient.On("RequestBlockRange", "node-3", uint64(2), uint64(2)).Return([]*block.Block{block2b}, nil) // Different
 	
 	blocks, consensusInfo, err := server.getConsensusBlocks(nodes, 1)
 	
@@ -335,8 +335,9 @@ func TestServer_handleLatestBlocks_Success(t *testing.T) {
 	}, nil)
 	
 	block2 := createTestBlock(2, "hash-2", 2000)
-	mockClient.On("RequestBlock", "node-1", uint64(2)).Return(block2, nil)
-	mockClient.On("RequestBlock", "node-2", uint64(2)).Return(block2, nil)
+	expectedBlocks := []*block.Block{block2}
+	mockClient.On("RequestBlockRange", "node-1", uint64(2), uint64(2)).Return(expectedBlocks, nil)
+	mockClient.On("RequestBlockRange", "node-2", uint64(2), uint64(2)).Return(expectedBlocks, nil)
 	
 	req, err := http.NewRequest("GET", "/api/blockchain/latest/1", nil)
 	assert.NoError(t, err)
