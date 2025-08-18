@@ -451,7 +451,9 @@ class GUI(QWidget):
         """
         if not weather_blocks:
             return []
-        
+
+        self.logger.info(f"Weather block after cleaning:{json.dumps(weather_blocks, indent=2)}")
+
         # Sort by timestamp from earliest to latest to easily find earliest in each hour
         sorted_blocks = sorted(weather_blocks, key=lambda x: x['time'])
         
@@ -486,6 +488,8 @@ class GUI(QWidget):
         cleaned_blocks = sorted(hourly_blocks.values(), key=lambda x: x['time'], reverse=True)
         
         self.logger.info(f"Cleaned {len(weather_blocks)} blocks into {len(cleaned_blocks)} hourly blocks")
+        self.logger.info(f"Weather block after cleaning:{json.dumps(cleaned_blocks, indent=2)}")
+
         return cleaned_blocks
 
     def _load_address_mapping(self):
