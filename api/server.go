@@ -18,10 +18,10 @@ var log = logger.Logger
 
 const (
 	// API request timeout constants
-	APIRequestTimeoutSeconds     = 6  // Maximum time to wait for all block range requests
-	NodeConnectionTimeoutSeconds = 3  // Connection timeout for individual node requests
-	NodeResponseTimeoutSeconds   = 5  // Response timeout for individual node requests
-	
+	APIRequestTimeoutSeconds     = 6 // Maximum time to wait for all block range requests
+	NodeConnectionTimeoutSeconds = 3 // Connection timeout for individual node requests
+	NodeResponseTimeoutSeconds   = 5 // Response timeout for individual node requests
+
 	// API limits
 	MaxBlocksPerRequest = 100 // Maximum number of blocks that can be requested at once
 )
@@ -88,8 +88,8 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/blockchain/compare", s.handleCompareNodes)
 
 	s.httpServer = &http.Server{
-		Addr:    ":" + s.port,
-		Handler: s.corsMiddleware(s.loggingMiddleware(mux)),
+		Addr:         ":" + s.port,
+		Handler:      s.corsMiddleware(s.loggingMiddleware(mux)),
 		ReadTimeout:  30 * time.Second, // Prevent slow client attacks
 		WriteTimeout: 30 * time.Second, // Prevent slow responses from hanging
 		IdleTimeout:  60 * time.Second, // Connection keep-alive timeout
@@ -737,9 +737,9 @@ func (s *Server) getConsensusBlocks(nodes []NodeInfo, n int) ([]*block.Block, *C
 		blocks []*block.Block
 		err    error
 	}
-	
+
 	resultChan := make(chan rangeResult, len(nodes))
-	
+
 	for _, node := range nodes {
 		nodeID := node.NodeID
 		nodeBlockData[nodeID] = make(map[uint64]*block.Block)
@@ -747,7 +747,7 @@ func (s *Server) getConsensusBlocks(nodes []NodeInfo, n int) ([]*block.Block, *C
 		// Launch goroutine for parallel block range request
 		go func(nID string) {
 			log.WithField("nodeID", nID).Debug("Requesting block range from node")
-			
+
 			blocks, err := s.nodeClient.RequestBlockRange(nID, startIndex, heightInfo.consensusHeight)
 			resultChan <- rangeResult{
 				nodeID: nID,
@@ -756,34 +756,34 @@ func (s *Server) getConsensusBlocks(nodes []NodeInfo, n int) ([]*block.Block, *C
 			}
 		}(nodeID)
 	}
-	
+
 	// Collect results from all nodes with timeout
 	timeout := time.After(APIRequestTimeoutSeconds * time.Second)
 	nodesCompleted := 0
-	
+
 	for nodesCompleted < len(nodes) {
 		select {
 		case result := <-resultChan:
 			nodesCompleted++
-			
+
 			if result.err != nil {
 				log.WithFields(logrus.Fields{
 					"nodeID": result.nodeID,
 					"error":  result.err,
 				}).Warn("Failed to get block range from node")
-				
+
 				nodeErrors[result.nodeID] = []string{fmt.Sprintf("range request failed: %v", result.err)}
 			} else {
 				log.WithFields(logrus.Fields{
 					"nodeID":      result.nodeID,
 					"blocksCount": len(result.blocks),
 				}).Debug("Received block range from node")
-				
+
 				// Process received blocks
 				for _, blockData := range result.blocks {
 					if blockData != nil && blockData.Index >= startIndex && blockData.Index <= heightInfo.consensusHeight {
 						nodeBlockData[result.nodeID][blockData.Index] = blockData
-						
+
 						// Track block selections for consensus
 						if consensusInfo.BlockSelections[blockData.Index] == nil {
 							consensusInfo.BlockSelections[blockData.Index] = make(map[string]int)
@@ -791,24 +791,24 @@ func (s *Server) getConsensusBlocks(nodes []NodeInfo, n int) ([]*block.Block, *C
 						consensusInfo.BlockSelections[blockData.Index][blockData.Hash]++
 					}
 				}
-				
+
 				// Mark node as successfully responded if no errors
 				if len(nodeErrors[result.nodeID]) == 0 {
 					consensusInfo.NodesResponded++
 				}
 			}
-			
+
 		case <-timeout:
 			log.WithFields(logrus.Fields{
-				"timeoutSeconds":  APIRequestTimeoutSeconds,
-				"completedNodes":  nodesCompleted,
-				"totalNodes":      len(nodes),
+				"timeoutSeconds": APIRequestTimeoutSeconds,
+				"completedNodes": nodesCompleted,
+				"totalNodes":     len(nodes),
 			}).Warn("Timeout waiting for block range requests, proceeding with available data")
 			goto processResults
 		}
 	}
-	
-	processResults:
+
+processResults:
 
 	log.WithFields(logrus.Fields{
 		"nodesResponded": consensusInfo.NodesResponded,
@@ -841,6 +841,18 @@ func (s *Server) getConsensusBlocks(nodes []NodeInfo, n int) ([]*block.Block, *C
 		"requestedBlocks": n,
 		"method":          consensusInfo.ConsensusMethod,
 	}).Info("Consensus block selection completed")
+
+	for i, block := range consensusBlocks {
+		log.WithFields(logrus.Fields{
+			"blockIndex":    i,
+			"blockHash":     block.Hash,
+			"blockNumber":   block.Index,
+			"timestamp":     block.Timestamp,
+			"prevHash":      block.PrevHash,
+			"validatorAddr": block.ValidatorAddress,
+			"data":          block.Data,
+		}).Info("Block details")
+	}
 
 	return consensusBlocks, consensusInfo, nil
 }
