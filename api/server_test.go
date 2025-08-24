@@ -156,28 +156,34 @@ func TestServer_getConsensusHeight(t *testing.T) {
 	
 	nodes := createTestNodes(3)
 	
-	// Mock blockchain info responses
+	// Mock blockchain info responses - all nodes have same height for simpler test
 	mockClient.On("RequestBlockchainInfo", "node-1").Return(&BlockchainInfo{
-		TotalBlocks: 10,
-		LatestHash:  "hash-9",
+		TotalBlocks: 5,
+		LatestHash:  "hash-4",
 	}, nil)
 	
 	mockClient.On("RequestBlockchainInfo", "node-2").Return(&BlockchainInfo{
-		TotalBlocks: 10,
-		LatestHash:  "hash-9",
+		TotalBlocks: 5,
+		LatestHash:  "hash-4",
 	}, nil)
 	
 	mockClient.On("RequestBlockchainInfo", "node-3").Return(&BlockchainInfo{
-		TotalBlocks: 8,
-		LatestHash:  "hash-7",
+		TotalBlocks: 5,
+		LatestHash:  "hash-4",
 	}, nil)
+	
+	// Mock block requests for consensus search
+	// Height 4: All nodes have it (unanimous consensus)
+	mockClient.On("RequestBlock", "node-1", uint64(4)).Return(createTestBlock(4, "hash-4", 4), nil)
+	mockClient.On("RequestBlock", "node-2", uint64(4)).Return(createTestBlock(4, "hash-4", 4), nil)
+	mockClient.On("RequestBlock", "node-3", uint64(4)).Return(createTestBlock(4, "hash-4", 4), nil)
 	
 	result, err := server.getConsensusHeight(nodes)
 	
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, uint64(9), result.consensusHeight) // Most common height (2 nodes have 10 blocks = height 9)
-	assert.Equal(t, uint64(9), result.maxHeight)
+	assert.Equal(t, uint64(4), result.consensusHeight, "Should find block-level consensus at height 4")
+	assert.Equal(t, uint64(4), result.maxHeight)
 	assert.Equal(t, 3, result.nodeCount)
 	
 	mockClient.AssertExpectations(t)
@@ -203,6 +209,209 @@ func TestServer_getConsensusHeight_AllNodesFail(t *testing.T) {
 	mockClient.AssertExpectations(t)
 }
 
+// TestServer_getConsensusHeight_BlockLevelConsensus tests the fixed consensus algorithm
+// This test reproduces the original bug scenario and verifies it's fixed
+func TestServer_getConsensusHeight_BlockLevelConsensus(t *testing.T) {
+	server := &Server{}
+	mockClient := &MockNodeClient{}
+	server.nodeClient = mockClient
+	
+	nodes := createTestNodes(3)
+	
+	// Simulate the original bug scenario:
+	// Node 1: Reports height 98 (stuck/lagging node)
+	// Node 2: Reports height 133 (normal node)
+	// Node 3: Reports height 137 (ahead node)
+	// This used to cause random consensus selection, now should find actual block consensus
+	mockClient.On("RequestBlockchainInfo", "node-1").Return(&BlockchainInfo{
+		TotalBlocks: 99,  // height 98
+		LatestHash:  "hash-98",
+	}, nil)
+	
+	mockClient.On("RequestBlockchainInfo", "node-2").Return(&BlockchainInfo{
+		TotalBlocks: 134, // height 133
+		LatestHash:  "hash-133",
+	}, nil)
+	
+	mockClient.On("RequestBlockchainInfo", "node-3").Return(&BlockchainInfo{
+		TotalBlocks: 138, // height 137
+		LatestHash:  "hash-137",
+	}, nil)
+	
+	// Algorithm searches from height 137 down, but only calls nodes that claim to have that height
+	
+	// Height 137: Only node-3 claims to have it, so only call node-3 (1/3 < majority)
+	mockClient.On("RequestBlock", "node-3", uint64(137)).Return(createTestBlock(137, "hash-137", 137), nil)
+	
+	// Height 136: Only node-3 claims to have it, so only call node-3 (1/3 < majority)
+	mockClient.On("RequestBlock", "node-3", uint64(136)).Return(createTestBlock(136, "hash-136", 136), nil)
+	
+	// Height 135: Only node-3 claims to have it, so only call node-3 (1/3 < majority)
+	mockClient.On("RequestBlock", "node-3", uint64(135)).Return(createTestBlock(135, "hash-135", 135), nil)
+	
+	// Height 134: Only node-3 claims to have it, so only call node-3 (1/3 < majority)
+	mockClient.On("RequestBlock", "node-3", uint64(134)).Return(createTestBlock(134, "hash-134", 134), nil)
+	
+	// Height 133: Node-2 and Node-3 claim to have it, so call both (2/3 >= majority!)
+	mockClient.On("RequestBlock", "node-2", uint64(133)).Return(createTestBlock(133, "hash-133", 133), nil)
+	mockClient.On("RequestBlock", "node-3", uint64(133)).Return(createTestBlock(133, "hash-133", 133), nil)
+	
+	result, err := server.getConsensusHeight(nodes)
+	
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	// The key fix: should find block-level consensus at height 133, not get stuck at 98
+	assert.Equal(t, uint64(133), result.consensusHeight, "Should find block-level consensus at height 133")
+	assert.Equal(t, uint64(137), result.maxHeight, "Max height should be 137")
+	assert.Equal(t, 3, result.nodeCount, "All 3 nodes responded")
+	
+	mockClient.AssertExpectations(t)
+}
+
+// TestServer_getConsensusHeight_NoBlockConsensus tests when no height has block consensus
+func TestServer_getConsensusHeight_NoBlockConsensus(t *testing.T) {
+	server := &Server{}
+	mockClient := &MockNodeClient{}
+	server.nodeClient = mockClient
+	
+	nodes := createTestNodes(3)
+	
+	// All nodes report different heights and none have overlapping blocks
+	mockClient.On("RequestBlockchainInfo", "node-1").Return(&BlockchainInfo{
+		TotalBlocks: 5, // height 4
+		LatestHash:  "hash-4a",
+	}, nil)
+	
+	mockClient.On("RequestBlockchainInfo", "node-2").Return(&BlockchainInfo{
+		TotalBlocks: 6, // height 5
+		LatestHash:  "hash-5b",
+	}, nil)
+	
+	mockClient.On("RequestBlockchainInfo", "node-3").Return(&BlockchainInfo{
+		TotalBlocks: 7, // height 6
+		LatestHash:  "hash-6c",
+	}, nil)
+	
+	// Algorithm searches from height 6 down, only calling nodes that claim to have each height
+	// Height 6: Only node-3 claims it (1/3 < majority)
+	mockClient.On("RequestBlock", "node-3", uint64(6)).Return(nil, fmt.Errorf("block not found"))
+	
+	// Height 5: Only node-2 and node-3 claim it (2/3 >= majority, but blocks don't exist)
+	mockClient.On("RequestBlock", "node-2", uint64(5)).Return(nil, fmt.Errorf("block not found"))
+	mockClient.On("RequestBlock", "node-3", uint64(5)).Return(nil, fmt.Errorf("block not found"))
+	
+	// Height 4: All nodes claim it (3/3 >= majority, but blocks don't exist)
+	mockClient.On("RequestBlock", "node-1", uint64(4)).Return(nil, fmt.Errorf("block not found"))
+	mockClient.On("RequestBlock", "node-2", uint64(4)).Return(nil, fmt.Errorf("block not found"))
+	mockClient.On("RequestBlock", "node-3", uint64(4)).Return(nil, fmt.Errorf("block not found"))
+	
+	// Continue down to height 1 with all nodes failing
+	for height := uint64(3); height >= 1; height-- {
+		mockClient.On("RequestBlock", "node-1", height).Return(nil, fmt.Errorf("block not found"))
+		mockClient.On("RequestBlock", "node-2", height).Return(nil, fmt.Errorf("block not found"))
+		mockClient.On("RequestBlock", "node-3", height).Return(nil, fmt.Errorf("block not found"))
+	}
+	
+	result, err := server.getConsensusHeight(nodes)
+	
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, uint64(0), result.consensusHeight, "Should return 0 when no block consensus exists")
+	assert.Equal(t, uint64(6), result.maxHeight, "Max height should still be reported")
+	assert.Equal(t, 3, result.nodeCount)
+	
+	mockClient.AssertExpectations(t)
+}
+
+// TestServer_getConsensusHeight_ConsensusAtLowerHeight tests consensus at a lower height
+func TestServer_getConsensusHeight_ConsensusAtLowerHeight(t *testing.T) {
+	server := &Server{}
+	mockClient := &MockNodeClient{}
+	server.nodeClient = mockClient
+	
+	nodes := createTestNodes(3)
+	
+	// Nodes have different heights but consensus at height 7
+	mockClient.On("RequestBlockchainInfo", "node-1").Return(&BlockchainInfo{
+		TotalBlocks: 6, // height 5
+		LatestHash:  "hash-5",
+	}, nil)
+	
+	mockClient.On("RequestBlockchainInfo", "node-2").Return(&BlockchainInfo{
+		TotalBlocks: 8, // height 7
+		LatestHash:  "hash-7",
+	}, nil)
+	
+	mockClient.On("RequestBlockchainInfo", "node-3").Return(&BlockchainInfo{
+		TotalBlocks: 10, // height 9
+		LatestHash:  "hash-9",
+	}, nil)
+	
+	// Algorithm searches from height 9 down, only calling nodes that claim to have each height
+	
+	// Height 9: Only node-3 claims it (1/3 < majority)
+	mockClient.On("RequestBlock", "node-3", uint64(9)).Return(createTestBlock(9, "hash-9", 9), nil)
+	
+	// Height 8: Only node-3 claims it (1/3 < majority)  
+	mockClient.On("RequestBlock", "node-3", uint64(8)).Return(createTestBlock(8, "hash-8", 8), nil)
+	
+	// Height 7: Node-2 and node-3 claim it (2/3 >= majority and both have the block!)
+	mockClient.On("RequestBlock", "node-2", uint64(7)).Return(createTestBlock(7, "hash-7", 7), nil)
+	mockClient.On("RequestBlock", "node-3", uint64(7)).Return(createTestBlock(7, "hash-7", 7), nil)
+	
+	result, err := server.getConsensusHeight(nodes)
+	
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, uint64(7), result.consensusHeight, "Should find consensus at height 7 where 2/3 nodes agree")
+	assert.Equal(t, uint64(9), result.maxHeight)
+	assert.Equal(t, 3, result.nodeCount)
+	
+	mockClient.AssertExpectations(t)
+}
+
+// TestServer_getConsensusHeight_MajorityThreshold tests different majority threshold scenarios
+func TestServer_getConsensusHeight_MajorityThreshold(t *testing.T) {
+	tests := []struct {
+		name          string
+		nodeCount     int
+		expectedThreshold int
+	}{
+		{"2 nodes", 2, 2}, // (2/2) + 1 = 2
+		{"3 nodes", 3, 2}, // (3/2) + 1 = 2 (integer division: 1+1)
+		{"4 nodes", 4, 3}, // (4/2) + 1 = 3
+		{"5 nodes", 5, 3}, // (5/2) + 1 = 3 (integer division: 2+1)
+	}
+	
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := &Server{}
+			mockClient := &MockNodeClient{}
+			server.nodeClient = mockClient
+			
+			nodes := createTestNodes(tt.nodeCount)
+			
+			// All nodes have height 0 (empty blockchain)
+			for i := 1; i <= tt.nodeCount; i++ {
+				nodeID := fmt.Sprintf("node-%d", i)
+				mockClient.On("RequestBlockchainInfo", nodeID).Return(&BlockchainInfo{
+					TotalBlocks: 0,
+					LatestHash:  "",
+				}, nil)
+			}
+			
+			result, err := server.getConsensusHeight(nodes)
+			
+			assert.NoError(t, err)
+			assert.NotNil(t, result)
+			assert.Equal(t, uint64(0), result.consensusHeight)
+			assert.Equal(t, tt.nodeCount, result.nodeCount)
+			
+			mockClient.AssertExpectations(t)
+		})
+	}
+}
+
 func TestServer_getConsensusBlocks_Success(t *testing.T) {
 	server := &Server{}
 	mockClient := &MockNodeClient{}
@@ -223,6 +432,11 @@ func TestServer_getConsensusBlocks_Success(t *testing.T) {
 		TotalBlocks: 5,
 		LatestHash:  "hash-4",
 	}, nil)
+	
+	// Mock block requests for height consensus (all nodes have block 4)
+	mockClient.On("RequestBlock", "node-1", uint64(4)).Return(createTestBlock(4, "hash-4", 4), nil)
+	mockClient.On("RequestBlock", "node-2", uint64(4)).Return(createTestBlock(4, "hash-4", 4), nil)
+	mockClient.On("RequestBlock", "node-3", uint64(4)).Return(createTestBlock(4, "hash-4", 4), nil)
 	
 	// Mock block range requests for latest 2 blocks (indices 3 and 4)
 	// All nodes return the same blocks (perfect consensus)
@@ -258,7 +472,7 @@ func TestServer_getConsensusBlocks_PartialConsensus(t *testing.T) {
 	
 	nodes := createTestNodes(3)
 	
-	// Mock height consensus
+	// Mock height consensus - all nodes have 3 blocks (height 2)
 	mockClient.On("RequestBlockchainInfo", "node-1").Return(&BlockchainInfo{
 		TotalBlocks: 3,
 		LatestHash:  "hash-2",
@@ -271,6 +485,11 @@ func TestServer_getConsensusBlocks_PartialConsensus(t *testing.T) {
 		TotalBlocks: 3,
 		LatestHash:  "hash-2",
 	}, nil)
+	
+	// Mock block requests for height consensus (all nodes have block 2)
+	mockClient.On("RequestBlock", "node-1", uint64(2)).Return(createTestBlock(2, "hash-2", 2), nil)
+	mockClient.On("RequestBlock", "node-2", uint64(2)).Return(createTestBlock(2, "hash-2", 2), nil)
+	mockClient.On("RequestBlock", "node-3", uint64(2)).Return(createTestBlock(2, "hash-2", 2), nil)
 	
 	// Mock block range requests where nodes have different blocks at index 2
 	block2a := createTestBlock(2, "hash-2a", 2000)
@@ -324,7 +543,7 @@ func TestServer_handleLatestBlocks_Success(t *testing.T) {
 	nodes := createTestNodes(2)
 	mockClient.On("GetDiscoveredNodes").Return(nodes)
 	
-	// Mock successful consensus
+	// Mock successful consensus - both nodes have 3 blocks (height 2)
 	mockClient.On("RequestBlockchainInfo", "node-1").Return(&BlockchainInfo{
 		TotalBlocks: 3,
 		LatestHash:  "hash-2",
@@ -334,6 +553,11 @@ func TestServer_handleLatestBlocks_Success(t *testing.T) {
 		LatestHash:  "hash-2",
 	}, nil)
 	
+	// Mock block requests for height consensus (both nodes have block 2)
+	mockClient.On("RequestBlock", "node-1", uint64(2)).Return(createTestBlock(2, "hash-2", 2), nil)
+	mockClient.On("RequestBlock", "node-2", uint64(2)).Return(createTestBlock(2, "hash-2", 2), nil)
+	
+	// Mock block range requests
 	block2 := createTestBlock(2, "hash-2", 2000)
 	expectedBlocks := []*block.Block{block2}
 	mockClient.On("RequestBlockRange", "node-1", uint64(2), uint64(2)).Return(expectedBlocks, nil)

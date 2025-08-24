@@ -944,14 +944,19 @@ type heightConsensusResult struct {
 	nodeCount       int
 }
 
-// getConsensusHeight determines the consensus height across nodes
+// getConsensusHeight determines the consensus height across nodes using block-level majority consensus
 func (s *Server) getConsensusHeight(nodes []NodeInfo) (*heightConsensusResult, error) {
 	log.WithField("nodeCount", len(nodes)).Debug("Determining consensus height across nodes")
 
-	heightCounts := make(map[uint64]int)
-	var maxHeight uint64 = 0
+	if len(nodes) == 0 {
+		return nil, fmt.Errorf("no nodes provided for height consensus")
+	}
 
+	// Get maximum height reported by any node to establish search range
+	var maxReportedHeight uint64 = 0
 	successfulNodes := 0
+	nodeHeights := make(map[string]uint64)
+
 	for _, node := range nodes {
 		info, err := s.nodeClient.RequestBlockchainInfo(node.NodeID)
 		if err != nil {
@@ -967,9 +972,9 @@ func (s *Server) getConsensusHeight(nodes []NodeInfo) (*heightConsensusResult, e
 			height = height - 1 // Convert from count to height (0-indexed)
 		}
 
-		heightCounts[height]++
-		if height > maxHeight {
-			maxHeight = height
+		nodeHeights[node.NodeID] = height
+		if height > maxReportedHeight {
+			maxReportedHeight = height
 		}
 		successfulNodes++
 
@@ -983,27 +988,54 @@ func (s *Server) getConsensusHeight(nodes []NodeInfo) (*heightConsensusResult, e
 		return nil, fmt.Errorf("no nodes responded successfully for height consensus")
 	}
 
-	// Find consensus height (most common height)
-	maxCount := 0
+	// Find actual consensus height by checking block-level majority from top down
+	majorityThreshold := (successfulNodes / 2) + 1
 	consensusHeight := uint64(0)
-	for height, count := range heightCounts {
-		if count > maxCount {
-			maxCount = count
-			consensusHeight = height
+
+	log.WithFields(logrus.Fields{
+		"maxReportedHeight":  maxReportedHeight,
+		"majorityThreshold":  majorityThreshold,
+		"nodeHeights":        nodeHeights,
+	}).Debug("Starting block-level consensus search")
+
+	// Search from maxReportedHeight down to find the highest height with block consensus
+	for currentHeight := maxReportedHeight; currentHeight > 0; currentHeight-- {
+		// Request this specific block from all nodes
+		blockConsensus := 0
+		for nodeID := range nodeHeights {
+			// Only check nodes that claim to have this height or higher
+			if nodeHeights[nodeID] >= currentHeight {
+				// Try to get the specific block at this height
+				_, err := s.nodeClient.RequestBlock(nodeID, currentHeight)
+				if err == nil {
+					blockConsensus++
+				}
+			}
+		}
+
+		// If majority of nodes have this block, this is our consensus height
+		if blockConsensus >= majorityThreshold {
+			consensusHeight = currentHeight
+			log.WithFields(logrus.Fields{
+				"consensusHeight": consensusHeight,
+				"blockConsensus":  blockConsensus,
+				"threshold":       majorityThreshold,
+			}).Debug("Found block-level consensus height")
+			break
 		}
 	}
 
 	log.WithFields(logrus.Fields{
 		"consensusHeight":    consensusHeight,
-		"maxHeight":          maxHeight,
-		"consensusNodeCount": maxCount,
-		"totalResponses":     successfulNodes,
-		"heightDistribution": heightCounts,
-	}).Info("Height consensus analysis completed")
+		"maxReportedHeight":  maxReportedHeight,
+		"majorityThreshold":  majorityThreshold,
+		"successfulNodes":    successfulNodes,
+		"nodeHeights":        nodeHeights,
+	}).Info("Block-level height consensus analysis completed")
 
 	return &heightConsensusResult{
 		consensusHeight: consensusHeight,
-		maxHeight:       maxHeight,
+		maxHeight:       maxReportedHeight,
 		nodeCount:       successfulNodes,
 	}, nil
 }
