@@ -62,18 +62,18 @@ func (ce *Engine) createNewBlockWithWeatherData(slotId uint64, peerWeatherData m
 			log.WithError(err).Warn("Failed to fetch weather data for block, using fallback")
 		} else {
 			weatherMap[ce.validatorID] = weatherData
-			log.WithFields(logger.Fields{
+			logger.DisplayInfoWithFields(logger.Fields{
 				"validatorAddress": ce.validatorID,
 				"slotId":           slotId,
 				"weatherData":      weatherData,
-			}).Info("Current node weather data included in block")
+			}, "Current node weather data included in block")
 		}
 	}
 
-	log.WithFields(logger.Fields{
+	logger.DisplayInfoWithFields(logger.Fields{
 		"slotId":              slotId,
 		"totalWeatherSources": len(weatherMap),
-	}).Info("Weather data aggregation completed for slot")
+	}, "Weather data aggregation completed for slot")
 
 	blockDataStruct := map[string]interface{}{
 		"slotId":    slotId,
@@ -127,14 +127,14 @@ func (ce *Engine) createNewBlockWithWeatherData(slotId uint64, peerWeatherData m
 
 	// Broadcast block to network immediately after generation
 	ce.networkBroadcaster.BroadcastBlock(newBlock)
-	log.WithFields(logger.Fields{
+	logger.DisplayInfoWithFields(logger.Fields{
 		"blockIndex": newBlock.Index,
 		"blockHash":  newBlock.Hash,
-	}).Info("Block broadcasted to network")
+	}, "Block broadcasted to network")
 
-	log.WithFields(logger.Fields{
+	logger.DisplayInfoWithFields(logger.Fields{
 		"blockIndex": newBlock.Index,
 		"blockHash":  newBlock.Hash,
 		"validator":  ce.validatorID,
-	}).Info("Successfully created and added new block")
+	}, "Successfully created and added new block")
 }

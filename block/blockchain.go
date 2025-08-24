@@ -647,12 +647,12 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 	blockchain.Blocks = append(blockchain.Blocks, block)
 	blockchain.LatestHash = blockchain.MainHead.Hash
 
-	log.WithFields(logger.Fields{
+	logger.DisplayInfoWithFields(logger.Fields{
 		"blockIndex": block.Index,
 		"blockHash":  block.Hash,
 		"parentHash": parentBlock.Hash,
 		"headsCount": len(blockchain.Heads),
-	}).Info("Block added to tree-based blockchain")
+	}, "Block added to tree-based blockchain")
 	return nil
 }
 
@@ -1099,7 +1099,7 @@ func (blockchain *Blockchain) AddBlockWithAutoSave(block *Block) error {
 		return err
 	}
 
-	log.WithField("blockIndex", block.Index).Info("Block added and blockchain saved to disk successfully")
+	logger.DisplayInfoWithFields(logger.Fields{"blockIndex": block.Index}, "Block added and blockchain saved to disk successfully")
 	return nil
 }
 

@@ -15,6 +15,9 @@ import (
 
 type Fields = logrus.Fields
 
+// DISPLAY_TAG is used to mark important logs that should be displayed on console
+const DISPLAY_TAG = "[DISPLAY]"
+
 // DatabaseHook writes logs to SQLite database
 type DatabaseHook struct {
 	db *sql.DB
@@ -111,23 +114,16 @@ func NewConsoleFilter(writer io.Writer) *ConsoleFilter {
 }
 
 // Write filters messages and only writes important ones to console
+// Only logs with DISPLAY_TAG are shown on console
 func (cf *ConsoleFilter) Write(p []byte) (n int, err error) {
 	logLine := string(p)
 
-	// Only log important messages to console
-	if strings.Contains(logLine, "[ERROR]") ||
-		strings.Contains(logLine, "[FATAL]") ||
-		strings.Contains(logLine, "[PANIC]") ||
-		strings.Contains(logLine, "[WARN]") ||
-		(strings.Contains(logLine, "[INFO]") && (strings.Contains(logLine, "created") ||
-			strings.Contains(logLine, "started") ||
-			strings.Contains(logLine, "stopped") ||
-			strings.Contains(logLine, "connected") ||
-			strings.Contains(logLine, "disconnected") ||
-			strings.Contains(logLine, "block") ||
-			strings.Contains(logLine, "sync") ||
-			strings.Contains(logLine, "validator"))) {
-		return cf.writer.Write(p)
+	// Only show logs with DISPLAY_TAG (after removing the tag)
+	if strings.Contains(logLine, DISPLAY_TAG) {
+		// Remove the DISPLAY_TAG before printing
+		cleanedLine := strings.ReplaceAll(logLine, DISPLAY_TAG+" ", "")
+		cleanedLine = strings.ReplaceAll(cleanedLine, DISPLAY_TAG, "")
+		return cf.writer.Write([]byte(cleanedLine))
 	}
 
 	// Return the length as if we wrote it (to avoid errors)
@@ -351,6 +347,36 @@ func InitializeLogger(logsDir string) error {
 	}).Info("Logger paths configured")
 
 	return nil
+}
+
+// DisplayInfo logs an info message that will be displayed on console
+func DisplayInfo(msg string) {
+	Logger.Info(DISPLAY_TAG + " " + msg)
+}
+
+// DisplayInfoWithFields logs an info message with fields that will be displayed on console
+func DisplayInfoWithFields(fields Fields, msg string) {
+	Logger.WithFields(fields).Info(DISPLAY_TAG + " " + msg)
+}
+
+// DisplayWarn logs a warning message that will be displayed on console
+func DisplayWarn(msg string) {
+	Logger.Warn(DISPLAY_TAG + " " + msg)
+}
+
+// DisplayWarnWithFields logs a warning message with fields that will be displayed on console
+func DisplayWarnWithFields(fields Fields, msg string) {
+	Logger.WithFields(fields).Warn(DISPLAY_TAG + " " + msg)
+}
+
+// DisplayError logs an error message that will be displayed on console
+func DisplayError(msg string) {
+	Logger.Error(DISPLAY_TAG + " " + msg)
+}
+
+// DisplayErrorWithFields logs an error message with fields that will be displayed on console
+func DisplayErrorWithFields(fields Fields, msg string) {
+	Logger.WithFields(fields).Error(DISPLAY_TAG + " " + msg)
 }
 
 func init() {

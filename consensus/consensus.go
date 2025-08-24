@@ -97,10 +97,10 @@ func (ce *Engine) monitorSlots() {
 
 			// STEP 2: Check if we're the validator for this slot
 			if ce.validatorSelection.IsLocalNodeValidatorForCurrentSlot() {
-				log.WithFields(logger.Fields{
+				logger.DisplayInfoWithFields(logger.Fields{
 					"validatorID": ce.validatorID,
 					"currentSlot": currentSlot,
-				}).Info("Node selected as validator for current slot")
+				}, "Node selected as validator for current slot")
 
 				// STEP 3: Validator waits and collects weather data from all peers
 				go ce.handleValidatorSlot(currentSlot)
@@ -145,10 +145,10 @@ func (ce *Engine) handleValidatorSlot(currentSlot uint64) {
 	// Collect weather data from all peers in the SAME slot
 	peerWeatherData := ce.collectWeatherDataForSlot(currentSlot)
 	
-	log.WithFields(logger.Fields{
+	logger.DisplayInfoWithFields(logger.Fields{
 		"currentSlot":        currentSlot,
 		"peerWeatherSources": len(peerWeatherData),
-	}).Info("Creating new block as validator with same-slot weather data")
+	}, "Creating new block as validator with same-slot weather data")
 	
 	// Create block with current slot weather data from all nodes
 	ce.createNewBlockWithWeatherData(currentSlot, peerWeatherData)
