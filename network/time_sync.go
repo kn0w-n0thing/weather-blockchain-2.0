@@ -11,16 +11,34 @@ import (
 
 const (
 	// SlotDuration is the fixed time allocated to each slot
-	SlotDuration = 10 * time.Minute
+	SlotDuration = 1 * time.Minute
 
 	// MaxClockDrift defines the maximum allowed deviation from network time
-	MaxClockDrift = 500 * time.Millisecond
+	MaxClockDrift = 5 * time.Second
 
 	// SyncInterval defines how often to check external time sources
-	SyncInterval = 60 * time.Second
+	SyncInterval = 24 * time.Hour
 
 	// SlotsPerEpoch defines how many slots make up an epoch
 	SlotsPerEpoch = 32
+	
+	// NTPSyncStaleThreshold defines when NTP sync is considered stale
+	NTPSyncStaleThreshold = 48 * time.Hour
+	
+	// FallbackClockDrift defines relaxed validation when NTP is unavailable
+	FallbackClockDrift = 10 * time.Second
+	
+	// SlotTrackerCheckInterval defines how often to check for slot transitions
+	SlotTrackerCheckInterval = 100 * time.Millisecond
+	
+	// ValidatorSlotMapSize defines the modulo size for validator slot mapping
+	ValidatorSlotMapSize = 10000
+	
+	// MaxValidatorsPerSlot defines maximum validators selected per slot
+	MaxValidatorsPerSlot = 4
+	
+	// FallbackValidatorCount defines number of fallback validators to generate
+	FallbackValidatorCount = 10
 )
 
 // TimeSync implements Ethereum-inspired slot-based time synchronization
@@ -158,18 +176,39 @@ func (timeSync *TimeSync) IsTimeValid(timestamp time.Time) bool {
 
 	networkTime := timeSync.GetNetworkTime()
 	diff := timestamp.Sub(networkTime)
+	
+	// Check if we've had recent successful NTP sync
+	timeSync.mutex.RLock()
+	timeSinceLastSync := time.Since(timeSync.lastSyncTime)
+	hasRecentSync := timeSinceLastSync < NTPSyncStaleThreshold
+	timeSync.mutex.RUnlock()
 
-	valid := diff > -timeSync.allowedDrift && diff < timeSync.allowedDrift
+	var valid bool
+	if !hasRecentSync {
+		// Fallback: Use local time if NTP sync is stale (more relaxed validation)
+		localDiff := timestamp.Sub(time.Now())
+		valid = localDiff > -FallbackClockDrift && localDiff < FallbackClockDrift
+		log.WithFields(logger.Fields{
+			"timestamp":         timestamp,
+			"localTime":         time.Now(),
+			"localDiff":         localDiff,
+			"timeSinceLastSync": timeSinceLastSync,
+			"fallbackDrift":     FallbackClockDrift,
+			"usingFallback":     true,
+			"isValid":           valid,
+		}).Warn("IsTimeValid: Using fallback validation due to stale NTP sync")
+	} else {
+		// Normal validation with network time
+		valid = diff > -timeSync.allowedDrift && diff < timeSync.allowedDrift
+		log.WithFields(logger.Fields{
+			"timestamp":    timestamp,
+			"networkTime":  networkTime,
+			"diff":         diff,
+			"allowedDrift": timeSync.allowedDrift,
+			"isValid":      valid,
+		}).Debug("IsTimeValid: Timestamp validation result")
+	}
 
-	log.WithFields(logger.Fields{
-		"timestamp":    timestamp,
-		"networkTime":  networkTime,
-		"diff":         diff,
-		"allowedDrift": timeSync.allowedDrift,
-		"isValid":      valid,
-	}).Debug("IsTimeValid: Timestamp validation result")
-
-	// Allow timestamps within MaxClockDrift of network time
 	return valid
 }
 
@@ -227,7 +266,7 @@ func (timeSync *TimeSync) IsValidatorForCurrentSlot() bool {
 	networkTime := time.Now().Add(timeSync.timeOffset)
 	elapsed := networkTime.Sub(timeSync.genesisTime)
 	currentSlot := uint64(elapsed / SlotDuration)
-	slotKey := currentSlot % 10000 // We use modulo to limit map size
+	slotKey := currentSlot % ValidatorSlotMapSize
 
 	log.WithFields(logger.Fields{
 		"currentSlot": currentSlot,
@@ -317,7 +356,7 @@ func (timeSync *TimeSync) runSlotTracker() {
 
 		// Wait a short time before checking again
 		// In practice, we'd use a more efficient approach with timers
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(SlotTrackerCheckInterval)
 	}
 }
 
@@ -345,7 +384,7 @@ func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 	} else {
 		// Fallback to generating fake validators if no network manager
 		log.Warn("assignValidatorsForSlot: No network manager available, using fallback validators")
-		for i := 0; i < 10; i++ {
+		for i := 0; i < FallbackValidatorCount; i++ {
 			candidateValidators = append(candidateValidators, fmt.Sprintf("validator-%d", i))
 		}
 	}
@@ -366,7 +405,7 @@ func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 
 	// Select validators for this slot from the candidate pool
 	validators := make([]string, 0)
-	maxValidators := min(4, len(candidateValidators)) // Select up to 4 validators or all available
+	maxValidators := minInt(MaxValidatorsPerSlot, len(candidateValidators))
 
 	for i := 0; i < maxValidators; i++ {
 		validatorIndex := new(big.Int).Add(seed, big.NewInt(int64(i)))
@@ -383,7 +422,7 @@ func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 	}
 
 	// Store the validators for this slot
-	slotKey := slot % 10000 // We use modulo to limit map size
+	slotKey := slot % ValidatorSlotMapSize
 	timeSync.validatorSlot[slotKey] = validators
 
 	isNodeValidator := false
@@ -404,8 +443,8 @@ func (timeSync *TimeSync) assignValidatorsForSlot(slot uint64) {
 	}).Debug("assignValidatorsForSlot: Assigned validators to slot")
 }
 
-// min returns the minimum of two integers
-func min(a, b int) int {
+// minInt returns the minimum of two integers
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}
