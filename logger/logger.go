@@ -5,7 +5,6 @@ import (
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/sirupsen/logrus"
-	"gopkg.in/natefinch/lumberjack.v2"
 	"io"
 	"os"
 	"path"
@@ -22,21 +21,16 @@ const DISPLAY_TAG = "[DISPLAY]"
 // Configuration constants
 const (
 	// Database configuration
-	DatabaseTimeout        = 5000          // milliseconds
-	MaxOpenConnections     = 1             // Single connection to avoid locks
-	MaxIdleConnections     = 1             // Single idle connection
-	ConnectionMaxLifetime  = time.Hour     // Connection lifetime
-	
-	// Queue configuration  
-	LogQueueBufferSize     = 1000          // Buffer up to 1000 log entries
-	
-	// File configuration
-	LogFileMaxSize         = 100           // MB
-	LogFileMaxBackups      = 2             // Number of backup files
-	LogFileMaxAge          = 30            // days
-	
+	DatabaseTimeout       = 5000      // milliseconds
+	MaxOpenConnections    = 1         // Single connection to avoid locks
+	MaxIdleConnections    = 1         // Single idle connection
+	ConnectionMaxLifetime = time.Hour // Connection lifetime
+
+	// Queue configuration
+	LogQueueBufferSize = 1000 // Buffer up to 1000 log entries
+
 	// Directory permissions
-	LogDirPermissions      = 0755          // Directory creation permissions
+	LogDirPermissions = 0755 // Directory creation permissions
 )
 
 // LogRequest represents a log write request
@@ -52,11 +46,11 @@ type LogRequest struct {
 
 // AsyncDatabaseHook writes logs to SQLite database asynchronously
 type AsyncDatabaseHook struct {
-	db          *sql.DB
-	logQueue    chan LogRequest
-	wg          sync.WaitGroup
-	shutdownCh  chan struct{}
-	once        sync.Once
+	db         *sql.DB
+	logQueue   chan LogRequest
+	wg         sync.WaitGroup
+	shutdownCh chan struct{}
+	once       sync.Once
 }
 
 // DatabaseHook writes logs to SQLite database (legacy for compatibility)
@@ -328,7 +322,7 @@ type LogEntry struct {
 	Fields       string    `json:"fields"`
 }
 
-// InitializeLogger sets up the logger with proper paths for database and file logging
+// InitializeLogger sets up the logger with proper paths for database logging
 func InitializeLogger(logsDir string) error {
 	// Ensure the logs directory exists
 	if err := os.MkdirAll(logsDir, LogDirPermissions); err != nil {
@@ -344,23 +338,12 @@ func InitializeLogger(logsDir string) error {
 	}
 	Logger.AddHook(dbHook)
 
-	// File rotation setup
-	logFile := path.Join(logsDir, "app.log")
-	fileWriter := &lumberjack.Logger{
-		Filename:   logFile,
-		MaxSize:    LogFileMaxSize,
-		MaxBackups: LogFileMaxBackups,
-		MaxAge:     LogFileMaxAge,
-		Compress:   true,
-	}
-
-	// Set output to console and file
-	Logger.Out = io.MultiWriter(NewConsoleFilter(os.Stdout), fileWriter)
+	// Set output to console only
+	Logger.Out = NewConsoleFilter(os.Stdout)
 
 	Logger.Info("Centralized logging system initialized successfully")
 	Logger.WithFields(Fields{
-		"dbPath":  dbPath,
-		"logFile": logFile,
+		"dbPath": dbPath,
 	}).Info("Logger paths configured")
 
 	return nil
