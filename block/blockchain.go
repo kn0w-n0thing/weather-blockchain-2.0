@@ -38,15 +38,15 @@ type Blockchain struct {
 func (blockchain *Blockchain) GetBlockCount() int {
 	blockchain.mutex.Lock()
 	defer blockchain.mutex.Unlock()
-	
+
 	blockCount := len(blockchain.Blocks)
 	log.WithFields(logger.Fields{
-		"blockCount": blockCount,
+		"blockCount":  blockCount,
 		"hasMainHead": blockchain.MainHead != nil,
-		"hasGenesis": blockchain.Genesis != nil,
-		"headsCount": len(blockchain.Heads),
+		"hasGenesis":  blockchain.Genesis != nil,
+		"headsCount":  len(blockchain.Heads),
 	}).Debug("GetBlockCount: Current blockchain state")
-	
+
 	return blockCount
 }
 
@@ -470,7 +470,7 @@ func (blockchain *Blockchain) loadBlocksFromDatabase() error {
 			validBlocks = append(validBlocks, block)
 		}
 	}
-	
+
 	// Update allBlocks to only include valid blocks
 	allBlocks = validBlocks
 
@@ -647,12 +647,12 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 	blockchain.Blocks = append(blockchain.Blocks, block)
 	blockchain.LatestHash = blockchain.MainHead.Hash
 
-	logger.DisplayInfoWithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"blockIndex": block.Index,
 		"blockHash":  block.Hash,
 		"parentHash": parentBlock.Hash,
 		"headsCount": len(blockchain.Heads),
-	}, "Block added to tree-based blockchain")
+	}).Info(logger.DISPLAY_TAG + " Block added to tree-based blockchain")
 	return nil
 }
 
@@ -1099,7 +1099,7 @@ func (blockchain *Blockchain) AddBlockWithAutoSave(block *Block) error {
 		return err
 	}
 
-	logger.DisplayInfoWithFields(logger.Fields{"blockIndex": block.Index}, "Block added and blockchain saved to disk successfully")
+	log.WithFields(logger.Fields{"blockIndex": block.Index}).Info(logger.DISPLAY_TAG + " Block added and blockchain saved to disk successfully")
 	return nil
 }
 

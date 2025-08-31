@@ -63,10 +63,10 @@ func (ce *Engine) monitorSlots() {
 	log.WithField("validatorID", ce.validatorID).Debug("Starting slot monitoring process")
 
 	var lastSlot uint64 = 0
-	
+
 	for {
 		currentSlot := ce.timeSync.GetCurrentSlot()
-		
+
 		// Only process if we've moved to a new slot
 		if currentSlot != lastSlot {
 			log.WithFields(logger.Fields{
@@ -84,7 +84,7 @@ func (ce *Engine) monitorSlots() {
 						"city":        weatherData.City,
 					}).Debug("Broadcasting own weather data to peers (all nodes)")
 					ce.networkBroadcaster.BroadcastWeatherData(currentSlot, ce.validatorID, weatherData)
-					
+
 					// Store our own weather data locally
 					ce.OnWeatherDataReceived(currentSlot, ce.validatorID, weatherData)
 				} else {
@@ -97,10 +97,10 @@ func (ce *Engine) monitorSlots() {
 
 			// STEP 2: Check if we're the validator for this slot
 			if ce.validatorSelection.IsLocalNodeValidatorForCurrentSlot() {
-				logger.DisplayInfoWithFields(logger.Fields{
+				log.WithFields(logger.Fields{
 					"validatorID": ce.validatorID,
 					"currentSlot": currentSlot,
-				}, "Node selected as validator for current slot")
+				}).Info(logger.DISPLAY_TAG + " Node selected as validator for current slot")
 
 				// STEP 3: Validator waits and collects weather data from all peers
 				go ce.handleValidatorSlot(currentSlot)
@@ -110,7 +110,7 @@ func (ce *Engine) monitorSlots() {
 					"currentSlot": currentSlot,
 				}).Debug("Node not selected as validator for current slot")
 			}
-			
+
 			lastSlot = currentSlot
 		}
 
@@ -130,7 +130,7 @@ func (ce *Engine) handleValidatorSlot(currentSlot uint64) {
 	// Wait until slot midpoint to collect peer weather data
 	slotStart := ce.timeSync.GetSlotStartTime(currentSlot)
 	slotMidpoint := slotStart.Add(network.SlotDuration / 2) // Half of slot duration
-	
+
 	now := ce.timeSync.GetNetworkTime()
 	if now.Before(slotMidpoint) {
 		waitTime := slotMidpoint.Sub(now)
@@ -144,12 +144,12 @@ func (ce *Engine) handleValidatorSlot(currentSlot uint64) {
 
 	// Collect weather data from all peers in the SAME slot
 	peerWeatherData := ce.collectWeatherDataForSlot(currentSlot)
-	
-	logger.DisplayInfoWithFields(logger.Fields{
+
+	log.WithFields(logger.Fields{
 		"currentSlot":        currentSlot,
 		"peerWeatherSources": len(peerWeatherData),
-	}, "Creating new block as validator with same-slot weather data")
-	
+	}).Info(logger.DISPLAY_TAG + " Creating new block as validator with same-slot weather data")
+
 	// Create block with current slot weather data from all nodes
 	ce.createNewBlockWithWeatherData(currentSlot, peerWeatherData)
 }
@@ -172,7 +172,7 @@ func (ce *Engine) GetPendingBlockCount() int {
 func (ce *Engine) collectWeatherDataForSlot(slotID uint64) map[string]*weather.Data {
 	ce.weatherDataMutex.RLock()
 	defer ce.weatherDataMutex.RUnlock()
-	
+
 	if slotData, exists := ce.currentSlotWeatherData[slotID]; exists {
 		// Create a copy to avoid concurrent access issues
 		result := make(map[string]*weather.Data)
@@ -188,7 +188,7 @@ func (ce *Engine) collectWeatherDataForSlot(slotID uint64) map[string]*weather.D
 func (ce *Engine) OnWeatherDataReceived(slotID uint64, validatorID string, data *weather.Data) {
 	ce.weatherDataMutex.Lock()
 	defer ce.weatherDataMutex.Unlock()
-	
+
 	// Check for nil weather data
 	if data == nil {
 		log.WithFields(logger.Fields{
@@ -197,22 +197,22 @@ func (ce *Engine) OnWeatherDataReceived(slotID uint64, validatorID string, data 
 		}).Warn("Received nil weather data from peer, ignoring")
 		return
 	}
-	
+
 	// Initialize slot data if it doesn't exist
 	if ce.currentSlotWeatherData[slotID] == nil {
 		ce.currentSlotWeatherData[slotID] = make(map[string]*weather.Data)
 	}
-	
+
 	// Store the weather data
 	ce.currentSlotWeatherData[slotID][validatorID] = data
-	
+
 	log.WithFields(logger.Fields{
 		"slotID":      slotID,
 		"validatorID": validatorID,
 		"city":        data.City,
 		"condition":   data.Condition,
 	}).Debug("Stored weather data from peer for current slot")
-	
+
 	// Clean up old slots to prevent memory leaks
 	ce.cleanupOldWeatherDataUnsafe()
 }
@@ -223,23 +223,23 @@ func (ce *Engine) cleanupOldWeatherDataUnsafe() {
 	if len(ce.currentSlotWeatherData) <= ce.maxSlotHistory {
 		return // No cleanup needed
 	}
-	
+
 	currentSlot := ce.timeSync.GetCurrentSlot()
 	slotsToDelete := make([]uint64, 0)
-	
+
 	// Find slots that are too old
 	for slotID := range ce.currentSlotWeatherData {
 		if slotID < currentSlot-uint64(ce.maxSlotHistory-1) {
 			slotsToDelete = append(slotsToDelete, slotID)
 		}
 	}
-	
+
 	// Delete old slots
 	for _, slotID := range slotsToDelete {
 		delete(ce.currentSlotWeatherData, slotID)
 		log.WithField("deletedSlotID", slotID).Debug("Cleaned up old weather data for slot")
 	}
-	
+
 	if len(slotsToDelete) > 0 {
 		log.WithFields(logger.Fields{
 			"currentSlot":    currentSlot,

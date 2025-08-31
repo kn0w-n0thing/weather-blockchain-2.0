@@ -3,13 +3,14 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/hashicorp/mdns"
+	"github.com/kn0w-n0thing/mdns"
 	"github.com/sirupsen/logrus"
 	"net"
 	"strconv"
 	"sync"
 	"time"
 	"weather-blockchain/block"
+	"weather-blockchain/logger"
 	"weather-blockchain/protocol"
 )
 
@@ -67,7 +68,8 @@ func (nc *NodeClient) DiscoverNodes() error {
 		Domain:      nc.domain,
 		Timeout:     3 * time.Second,
 		Entries:     entriesCh,
-		DisableIPv6: true, // Match the blockchain nodes' IPv6 setting
+		DisableIPv6: true,
+		Logger:      logger.Logger,
 	}
 
 	log.WithFields(logrus.Fields{
@@ -239,11 +241,11 @@ func (nc *NodeClient) RequestBlockchainInfo(nodeID string) (*BlockchainInfo, err
 
 	// Create blockchain info from the height response
 	info := &BlockchainInfo{
-		TotalBlocks:  heightResp.BlockCount,
-		LatestHash:   heightResp.LatestHash,
-		GenesisHash:  heightResp.GenesisHash,
-		LastUpdated:  time.Now(),
-		ChainValid:   true, // Assume valid for now
+		TotalBlocks: heightResp.BlockCount,
+		LatestHash:  heightResp.LatestHash,
+		GenesisHash: heightResp.GenesisHash,
+		LastUpdated: time.Now(),
+		ChainValid:  true, // Assume valid for now
 	}
 
 	// Update node info with latest data

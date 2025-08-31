@@ -62,7 +62,7 @@ func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
 		return nil, fmt.Errorf("creator account cannot be nil")
 	}
 
-	logger.DisplayInfoWithFields(logger.Fields{"validator": creatorAccount.Address}, "Creating genesis block")
+	log.WithFields(logger.Fields{"validator": creatorAccount.Address}).Info(logger.DISPLAY_TAG + " Creating genesis block")
 
 	currentTime := time.Now().UnixNano()
 	log.WithField("timestamp", currentTime).Debug("Setting genesis block timestamp")
@@ -94,12 +94,12 @@ func CreateGenesisBlock(creatorAccount *account.Account) (*Block, error) {
 	}
 	genesisBlock.ValidatorPublicKey = publicKeyBytes
 
-	logger.DisplayInfoWithFields(logger.Fields{
+	log.WithFields(logger.Fields{
 		"index":     genesisBlock.Index,
 		"timestamp": genesisBlock.Timestamp,
 		"validator": genesisBlock.ValidatorAddress,
 		"sigBytes":  len(genesisBlock.Signature),
-	}, "Genesis block created successfully")
+	}).Info(logger.DISPLAY_TAG + " Genesis block created successfully")
 
 	return genesisBlock, nil
 }
