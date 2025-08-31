@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -18,23 +19,68 @@ type Fields = logrus.Fields
 // DISPLAY_TAG is used to mark important logs that should be displayed on console
 const DISPLAY_TAG = "[DISPLAY]"
 
-// DatabaseHook writes logs to SQLite database
-type DatabaseHook struct {
-	db *sql.DB
+// Configuration constants
+const (
+	// Database configuration
+	DatabaseTimeout        = 5000          // milliseconds
+	MaxOpenConnections     = 1             // Single connection to avoid locks
+	MaxIdleConnections     = 1             // Single idle connection
+	ConnectionMaxLifetime  = time.Hour     // Connection lifetime
+	
+	// Queue configuration  
+	LogQueueBufferSize     = 1000          // Buffer up to 1000 log entries
+	
+	// File configuration
+	LogFileMaxSize         = 100           // MB
+	LogFileMaxBackups      = 2             // Number of backup files
+	LogFileMaxAge          = 30            // days
+	
+	// Directory permissions
+	LogDirPermissions      = 0755          // Directory creation permissions
+)
+
+// LogRequest represents a log write request
+type LogRequest struct {
+	timestamp    time.Time
+	level        string
+	message      string
+	functionName string
+	fileName     string
+	lineNumber   int
+	fields       string
 }
 
-// NewDatabaseHook creates a new database hook
-func NewDatabaseHook(dbPath string) (*DatabaseHook, error) {
+// AsyncDatabaseHook writes logs to SQLite database asynchronously
+type AsyncDatabaseHook struct {
+	db          *sql.DB
+	logQueue    chan LogRequest
+	wg          sync.WaitGroup
+	shutdownCh  chan struct{}
+	once        sync.Once
+}
+
+// DatabaseHook writes logs to SQLite database (legacy for compatibility)
+type DatabaseHook struct {
+	*AsyncDatabaseHook
+}
+
+// NewAsyncDatabaseHook creates a new async database hook
+func NewAsyncDatabaseHook(dbPath string) (*AsyncDatabaseHook, error) {
 	// Ensure the directory exists
 	dir := path.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, LogDirPermissions); err != nil {
 		return nil, fmt.Errorf("failed to create log directory: %v", err)
 	}
 
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := sql.Open("sqlite3", fmt.Sprintf("%s?_journal_mode=WAL&_timeout=%d", dbPath, DatabaseTimeout))
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %v", err)
 	}
+
+	// Set connection pool settings
+	db.SetMaxOpenConns(MaxOpenConnections) // Single connection to avoid locks
+	db.SetMaxIdleConns(MaxIdleConnections)
+	db.SetConnMaxLifetime(ConnectionMaxLifetime)
 
 	// Create logs table if not exists
 	createTableSQL := `
@@ -53,11 +99,86 @@ func NewDatabaseHook(dbPath string) (*DatabaseHook, error) {
 		return nil, fmt.Errorf("failed to create logs table: %v", err)
 	}
 
-	return &DatabaseHook{db: db}, nil
+	hook := &AsyncDatabaseHook{
+		db:         db,
+		logQueue:   make(chan LogRequest, LogQueueBufferSize),
+		shutdownCh: make(chan struct{}),
+	}
+
+	// Start the async worker
+	hook.wg.Add(1)
+	go hook.worker()
+
+	return hook, nil
 }
 
-// Fire is called when a logging event is fired
-func (hook *DatabaseHook) Fire(entry *logrus.Entry) error {
+// NewDatabaseHook creates a new database hook (wrapper for backward compatibility)
+func NewDatabaseHook(dbPath string) (*DatabaseHook, error) {
+	asyncHook, err := NewAsyncDatabaseHook(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	return &DatabaseHook{AsyncDatabaseHook: asyncHook}, nil
+}
+
+// worker processes log requests asynchronously
+func (hook *AsyncDatabaseHook) worker() {
+	defer hook.wg.Done()
+
+	insertSQL := `
+	INSERT INTO logs (timestamp, level, message, function_name, file_name, line_number, fields)
+	VALUES (?, ?, ?, ?, ?, ?, ?)`
+
+	for {
+		select {
+		case logReq := <-hook.logQueue:
+			// Process the log request
+			_, err := hook.db.Exec(insertSQL,
+				logReq.timestamp,
+				logReq.level,
+				logReq.message,
+				logReq.functionName,
+				logReq.fileName,
+				logReq.lineNumber,
+				logReq.fields,
+			)
+			if err != nil {
+				// Log to stderr to avoid infinite recursion
+				fmt.Fprintf(os.Stderr, "Failed to write log to database: %v\n", err)
+			}
+		case <-hook.shutdownCh:
+			// Drain remaining logs before shutdown
+			for {
+				select {
+				case logReq := <-hook.logQueue:
+					hook.db.Exec(insertSQL,
+						logReq.timestamp,
+						logReq.level,
+						logReq.message,
+						logReq.functionName,
+						logReq.fileName,
+						logReq.lineNumber,
+						logReq.fields,
+					)
+				default:
+					return
+				}
+			}
+		}
+	}
+}
+
+// Shutdown gracefully shuts down the async hook
+func (hook *AsyncDatabaseHook) Shutdown() {
+	hook.once.Do(func() {
+		close(hook.shutdownCh)
+		hook.wg.Wait()
+		hook.db.Close()
+	})
+}
+
+// Fire is called when a logging event is fired (async version)
+func (hook *AsyncDatabaseHook) Fire(entry *logrus.Entry) error {
 	var fileName, funcName string
 	var lineNum int
 
@@ -81,26 +202,40 @@ func (hook *DatabaseHook) Fire(entry *logrus.Entry) error {
 		fieldsJSON = strings.Join(fieldParts, ", ")
 	}
 
-	insertSQL := `
-	INSERT INTO logs (timestamp, level, message, function_name, file_name, line_number, fields)
-	VALUES (?, ?, ?, ?, ?, ?, ?)`
+	// Create log request
+	logReq := LogRequest{
+		timestamp:    entry.Time,
+		level:        entry.Level.String(),
+		message:      entry.Message,
+		functionName: funcName,
+		fileName:     fileName,
+		lineNumber:   lineNum,
+		fields:       fieldsJSON,
+	}
 
-	_, err := hook.db.Exec(insertSQL,
-		entry.Time,
-		entry.Level.String(),
-		entry.Message,
-		funcName,
-		fileName,
-		lineNum,
-		fieldsJSON,
-	)
-
-	return err
+	// Non-blocking send to queue
+	select {
+	case hook.logQueue <- logReq:
+		return nil
+	default:
+		// Queue is full, drop the log to avoid blocking
+		return fmt.Errorf("log queue is full, dropping log entry")
+	}
 }
 
-// Levels returns the available logging levels
-func (hook *DatabaseHook) Levels() []logrus.Level {
+// Fire is called when a logging event is fired (DatabaseHook wrapper)
+func (hook *DatabaseHook) Fire(entry *logrus.Entry) error {
+	return hook.AsyncDatabaseHook.Fire(entry)
+}
+
+// Levels returns the available logging levels (async version)
+func (hook *AsyncDatabaseHook) Levels() []logrus.Level {
 	return logrus.AllLevels
+}
+
+// Levels returns the available logging levels (DatabaseHook wrapper)
+func (hook *DatabaseHook) Levels() []logrus.Level {
+	return hook.AsyncDatabaseHook.Levels()
 }
 
 // ConsoleFilter filters logs for console output (only important messages)
@@ -196,7 +331,7 @@ type LogEntry struct {
 // InitializeLogger sets up the logger with proper paths for database and file logging
 func InitializeLogger(logsDir string) error {
 	// Ensure the logs directory exists
-	if err := os.MkdirAll(logsDir, 0755); err != nil {
+	if err := os.MkdirAll(logsDir, LogDirPermissions); err != nil {
 		return fmt.Errorf("failed to create logs directory: %v", err)
 	}
 
@@ -213,9 +348,9 @@ func InitializeLogger(logsDir string) error {
 	logFile := path.Join(logsDir, "app.log")
 	fileWriter := &lumberjack.Logger{
 		Filename:   logFile,
-		MaxSize:    100, // MB
-		MaxBackups: 2,
-		MaxAge:     30, // days
+		MaxSize:    LogFileMaxSize,
+		MaxBackups: LogFileMaxBackups,
+		MaxAge:     LogFileMaxAge,
 		Compress:   true,
 	}
 
