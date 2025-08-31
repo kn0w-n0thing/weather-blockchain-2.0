@@ -11,7 +11,7 @@ import (
 
 const (
 	// SlotDuration is the fixed time allocated to each slot
-	SlotDuration = 1 * time.Minute
+	SlotDuration = 10 * time.Minute
 
 	// MaxClockDrift defines the maximum allowed deviation from network time
 	MaxClockDrift = 5 * time.Second
@@ -21,22 +21,22 @@ const (
 
 	// SlotsPerEpoch defines how many slots make up an epoch
 	SlotsPerEpoch = 32
-	
+
 	// NTPSyncStaleThreshold defines when NTP sync is considered stale
 	NTPSyncStaleThreshold = 48 * time.Hour
-	
+
 	// FallbackClockDrift defines relaxed validation when NTP is unavailable
 	FallbackClockDrift = 10 * time.Second
-	
+
 	// SlotTrackerCheckInterval defines how often to check for slot transitions
 	SlotTrackerCheckInterval = 100 * time.Millisecond
-	
+
 	// ValidatorSlotMapSize defines the modulo size for validator slot mapping
 	ValidatorSlotMapSize = 10000
-	
+
 	// MaxValidatorsPerSlot defines maximum validators selected per slot
 	MaxValidatorsPerSlot = 4
-	
+
 	// FallbackValidatorCount defines number of fallback validators to generate
 	FallbackValidatorCount = 10
 )
@@ -176,7 +176,7 @@ func (timeSync *TimeSync) IsTimeValid(timestamp time.Time) bool {
 
 	networkTime := timeSync.GetNetworkTime()
 	diff := timestamp.Sub(networkTime)
-	
+
 	// Check if we've had recent successful NTP sync
 	timeSync.mutex.RLock()
 	timeSinceLastSync := time.Since(timeSync.lastSyncTime)
