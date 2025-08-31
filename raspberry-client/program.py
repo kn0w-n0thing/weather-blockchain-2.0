@@ -1,10 +1,11 @@
 import argparse
+import faulthandler
 import json
 import logging
+import psutil
 import signal
-import sys
-import faulthandler
 import sqlite3
+import sys
 
 import requests
 from PyQt5.QtCore import QTimer, Qt
@@ -23,6 +24,12 @@ SCREEN_HEIGHT = 1929
 MAX_WEATHER_RECORDS = 6
 WEATHER_DB_PATH = "weather_data.db"
 LOGS_DB_PATH = "logs.db"
+FETCH_INTERVAL_MS = 5 * 60 * 1000  # 5 minutes
+MONITOR_INTERVAL_MS = 30 * 1000     # 30 seconds
+SIGNAL_CHECK_INTERVAL_MS = 500      # 500ms
+CPU_MONITOR_INTERVAL = 1            # CPU monitoring interval in seconds
+TOP_PROCESSES_COUNT = 5             # Number of top processes to display
+BYTES_TO_MB = 1024 * 1024          # Conversion factor
 
 # Configure logging
 logging.basicConfig(
@@ -45,9 +52,9 @@ def setup_signal_handling():
     signal.signal(signal.SIGINT, signal_handler)  # Ctrl+C
     signal.signal(signal.SIGTERM, signal_handler)  # kill command
 
-    # Wake up PyQt event loop every 500 ms to check for signals
+    # Wake up PyQt event loop to check for signals
     check_signal_timer: QTimer = QTimer()
-    check_signal_timer.start(500)
+    check_signal_timer.start(SIGNAL_CHECK_INTERVAL_MS)
     check_signal_timer.timeout.connect(lambda: None)  # Do nothing, just wake up
 
     return check_signal_timer
@@ -84,6 +91,7 @@ class GUI(QWidget):
         # Timers
         self.data_timer = QTimer()
         self.fetch_timer = QTimer()
+        self.monitor_timer = QTimer()
 
         # Initialize UI
         load_fonts()
@@ -94,10 +102,15 @@ class GUI(QWidget):
         if self._fetch_weather_data():
             self._refresh_gui_data()
         
-        # Setup fetch timer (every 5 minutes) that only refreshes GUI when the database changes
-        self.fetch_timer.setInterval(5 * 60 * 1000)
+        # Setup fetch timer that only refreshes GUI when the database changes
+        self.fetch_timer.setInterval(FETCH_INTERVAL_MS)
         self.fetch_timer.timeout.connect(self._on_fetch_timer)
         self.fetch_timer.start()
+        
+        # Setup system monitor timer
+        self.monitor_timer.setInterval(MONITOR_INTERVAL_MS)
+        self.monitor_timer.timeout.connect(self._monitor_system_resources)
+        self.monitor_timer.start()
 
         self.logger.info("Weather Display initialization complete")
 
@@ -388,6 +401,45 @@ class GUI(QWidget):
         """Timer callback that fetches data and refreshes GUI only if the database changed"""
         if self._fetch_weather_data():
             self._refresh_gui_data()
+    
+    def _monitor_system_resources(self):
+        """Monitor and log CPU, memory usage and top resource-consuming applications"""
+        try:
+            cpu_percent = psutil.cpu_percent(interval=CPU_MONITOR_INTERVAL)
+            memory = psutil.virtual_memory()
+            memory_percent = memory.percent
+            memory_available_mb = memory.available / BYTES_TO_MB
+            
+            # Get all processes and their resource usage
+            processes = []
+            for proc in psutil.process_iter(['pid', 'name', 'cpu_percent', 'memory_percent']):
+                try:
+                    proc_info = proc.info
+                    if proc_info['cpu_percent'] is not None and proc_info['memory_percent'] is not None:
+                        processes.append(proc_info)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            # Sort by CPU usage and get top processes
+            top_cpu = sorted(processes, key=lambda x: x['cpu_percent'], reverse=True)[:TOP_PROCESSES_COUNT]
+            
+            # Sort by memory usage and get top processes
+            top_memory = sorted(processes, key=lambda x: x['memory_percent'], reverse=True)[:TOP_PROCESSES_COUNT]
+            
+            self.logger.info(f"System resources - CPU: {cpu_percent:.1f}%, Memory: {memory_percent:.1f}% used, {memory_available_mb:.0f}MB available")
+            
+            # Log top CPU consumers
+            cpu_info = ", ".join([f"{p['name']}({p['cpu_percent']:.1f}%)" for p in top_cpu if p['cpu_percent'] > 0])
+            if cpu_info:
+                self.logger.info(f"Top CPU consumers: {cpu_info}")
+            
+            # Log top memory consumers
+            mem_info = ", ".join([f"{p['name']}({p['memory_percent']:.1f}%)" for p in top_memory if p['memory_percent'] > 0])
+            if mem_info:
+                self.logger.info(f"Top memory consumers: {mem_info}")
+            
+        except Exception as e:
+            self.logger.error(f"Error monitoring system resources: {e}")
     
 
     def _extract_weather_blocks(self, api_data):
