@@ -24,13 +24,17 @@ const (
 
 	// API limits
 	MaxBlocksPerRequest = 100 // Maximum number of blocks that can be requested at once
+
+	// Node discovery constants
+	NodeDiscoveryIntervalMinutes = 5 // Interval in minutes for automatic node discovery
 )
 
 // Server represents the API server
 type Server struct {
-	port       string
-	nodeClient NodeClientInterface
-	httpServer *http.Server
+	port           string
+	nodeClient     NodeClientInterface
+	httpServer     *http.Server
+	discoveryTimer *time.Timer
 }
 
 // Response represents a standard API response
@@ -95,6 +99,9 @@ func (s *Server) Start() error {
 		IdleTimeout:  60 * time.Second, // Connection keep-alive timeout
 	}
 
+	// Start periodic node discovery timer
+	s.startPeriodicNodeDiscovery()
+
 	log.WithFields(logrus.Fields{
 		"port":            s.port,
 		"address":         s.httpServer.Addr,
@@ -112,6 +119,10 @@ func (s *Server) Start() error {
 // Stop stops the API server
 func (s *Server) Stop() error {
 	log.Info("Stopping blockchain API server")
+
+	// Stop periodic node discovery timer
+	s.stopPeriodicNodeDiscovery()
+
 	if s.httpServer != nil {
 		log.WithField("address", s.httpServer.Addr).Info("Closing HTTP server")
 		err := s.httpServer.Close()
@@ -291,24 +302,7 @@ func (s *Server) handleDiscoverNodes(w http.ResponseWriter, r *http.Request) {
 	}).Info("Node discovery completed")
 
 	// Log details of newly discovered nodes
-	if newNodeCount > 0 {
-		for _, node := range nodes {
-			found := false
-			for _, prevNode := range previousNodes {
-				if prevNode.NodeID == node.NodeID {
-					found = true
-					break
-				}
-			}
-			if !found {
-				log.WithFields(logrus.Fields{
-					"nodeID":  node.NodeID,
-					"address": node.Address,
-					"port":    node.Port,
-				}).Info("New blockchain node discovered")
-			}
-		}
-	}
+	s.logNewlyDiscoveredNodes(nodes, previousNodes, "manual discovery")
 
 	responseData := map[string]interface{}{
 		"nodes":      nodes,
@@ -993,9 +987,9 @@ func (s *Server) getConsensusHeight(nodes []NodeInfo) (*heightConsensusResult, e
 	consensusHeight := uint64(0)
 
 	log.WithFields(logrus.Fields{
-		"maxReportedHeight":  maxReportedHeight,
-		"majorityThreshold":  majorityThreshold,
-		"nodeHeights":        nodeHeights,
+		"maxReportedHeight": maxReportedHeight,
+		"majorityThreshold": majorityThreshold,
+		"nodeHeights":       nodeHeights,
 	}).Debug("Starting block-level consensus search")
 
 	// Search from maxReportedHeight down to find the highest height with block consensus
@@ -1026,11 +1020,11 @@ func (s *Server) getConsensusHeight(nodes []NodeInfo) (*heightConsensusResult, e
 	}
 
 	log.WithFields(logrus.Fields{
-		"consensusHeight":    consensusHeight,
-		"maxReportedHeight":  maxReportedHeight,
-		"majorityThreshold":  majorityThreshold,
-		"successfulNodes":    successfulNodes,
-		"nodeHeights":        nodeHeights,
+		"consensusHeight":   consensusHeight,
+		"maxReportedHeight": maxReportedHeight,
+		"majorityThreshold": majorityThreshold,
+		"successfulNodes":   successfulNodes,
+		"nodeHeights":       nodeHeights,
 	}).Info("Block-level height consensus analysis completed")
 
 	return &heightConsensusResult{
@@ -1038,4 +1032,77 @@ func (s *Server) getConsensusHeight(nodes []NodeInfo) (*heightConsensusResult, e
 		maxHeight:       maxReportedHeight,
 		nodeCount:       successfulNodes,
 	}, nil
+}
+
+// startPeriodicNodeDiscovery starts a timer that triggers node discovery at regular intervals
+func (s *Server) startPeriodicNodeDiscovery() {
+	interval := time.Duration(NodeDiscoveryIntervalMinutes) * time.Minute
+	log.WithField("interval", interval).Info("Starting periodic node discovery timer")
+
+	s.discoveryTimer = time.AfterFunc(interval, func() {
+		s.performPeriodicDiscovery()
+	})
+}
+
+// performPeriodicDiscovery executes the periodic node discovery and reschedules the next one
+func (s *Server) performPeriodicDiscovery() {
+	log.Info("Performing periodic node discovery")
+
+	previousNodes := s.nodeClient.GetDiscoveredNodes()
+	log.WithField("previousNodeCount", len(previousNodes)).Debug("Nodes before periodic discovery")
+
+	err := s.nodeClient.DiscoverNodes()
+	if err != nil {
+		log.WithError(err).Warn("Periodic node discovery failed, will retry on next interval")
+	} else {
+		nodes := s.nodeClient.GetDiscoveredNodes()
+		newNodeCount := len(nodes) - len(previousNodes)
+		log.WithFields(logrus.Fields{
+			"totalNodes": len(nodes),
+			"newNodes":   newNodeCount,
+		}).Info("Periodic node discovery completed")
+
+		// Log details of newly discovered nodes
+		s.logNewlyDiscoveredNodes(nodes, previousNodes, "periodic discovery")
+	}
+
+	interval := time.Duration(NodeDiscoveryIntervalMinutes) * time.Minute
+	s.discoveryTimer = time.AfterFunc(interval, func() {
+		s.performPeriodicDiscovery()
+	})
+}
+
+// stopPeriodicNodeDiscovery stops the periodic node discovery timer
+func (s *Server) stopPeriodicNodeDiscovery() {
+	if s.discoveryTimer != nil {
+		s.discoveryTimer.Stop()
+		s.discoveryTimer = nil
+		log.Info("Stopped periodic node discovery timer")
+	}
+}
+
+// logNewlyDiscoveredNodes compares current nodes with previous nodes and logs any new discoveries
+func (s *Server) logNewlyDiscoveredNodes(currentNodes, previousNodes []NodeInfo, context string) {
+	newNodeCount := len(currentNodes) - len(previousNodes)
+	if newNodeCount <= 0 {
+		return
+	}
+
+	for _, node := range currentNodes {
+		found := false
+		for _, prevNode := range previousNodes {
+			if prevNode.NodeID == node.NodeID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.WithFields(logrus.Fields{
+				"nodeID":  node.NodeID,
+				"address": node.Address,
+				"port":    node.Port,
+				"context": context,
+			}).Info("New blockchain node discovered")
+		}
+	}
 }
