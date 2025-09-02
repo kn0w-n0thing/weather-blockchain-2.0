@@ -237,8 +237,8 @@ type ConsoleFilter struct {
 	writer io.Writer
 }
 
-// NewConsoleFilter creates a new console filter
-func NewConsoleFilter(writer io.Writer) *ConsoleFilter {
+// DisplayConsoleFilter creates a console filter for display
+func DisplayConsoleFilter(writer io.Writer) *ConsoleFilter {
 	return &ConsoleFilter{writer: writer}
 }
 
@@ -323,7 +323,8 @@ type LogEntry struct {
 }
 
 // InitializeLogger sets up the logger with proper paths for database logging
-func InitializeLogger(logsDir string) error {
+// useConsoleFilter: if false (default), logs all messages to console; if true, only logs with DISPLAY_TAG
+func InitializeLogger(logsDir string, useConsoleFilter bool) error {
 	// Ensure the logs directory exists
 	if err := os.MkdirAll(logsDir, LogDirPermissions); err != nil {
 		return fmt.Errorf("failed to create logs directory: %v", err)
@@ -338,8 +339,11 @@ func InitializeLogger(logsDir string) error {
 	}
 	Logger.AddHook(dbHook)
 
-	// Set output to console only
-	Logger.Out = NewConsoleFilter(os.Stdout)
+	if useConsoleFilter {
+		Logger.Out = DisplayConsoleFilter(os.Stdout)
+	} else {
+		Logger.Out = os.Stdout
+	}
 
 	Logger.Info("Centralized logging system initialized successfully")
 	Logger.WithFields(Fields{

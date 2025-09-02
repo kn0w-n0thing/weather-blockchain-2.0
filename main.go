@@ -127,7 +127,7 @@ func runApp(ctx *cli.Context) error {
 	config := loadConfig(ctx)
 
 	// Initialize centralized logging system first
-	if err := logger.InitializeLogger("logs"); err != nil {
+	if err := logger.InitializeLogger("logs", true); err != nil {
 		return fmt.Errorf("failed to initialize logger: %v", err)
 	}
 

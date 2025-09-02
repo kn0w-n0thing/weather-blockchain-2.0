@@ -43,7 +43,7 @@ func runAPIServer(c *cli.Context) error {
 	port := c.String("port")
 
 	// Initialize centralized logging system first
-	if err := logger.InitializeLogger("logs"); err != nil {
+	if err := logger.InitializeLogger("logs", false); err != nil {
 		return fmt.Errorf("failed to initialize logger: %v", err)
 	}
 
