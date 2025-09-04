@@ -79,10 +79,6 @@ class GUI(QWidget):
         self.winner_icons = []
         self.current_weather_data = []
         
-        # Widget caching for history panel
-        self.past_weather_widgets = []  # Cache widgets to avoid recreation
-        self.past_weather_panel = None  # Cache the panel itself
-        
         # Database connection pooling
         self.db_connection = None
 
@@ -661,8 +657,7 @@ class GUI(QWidget):
         layout.addWidget(wind_widget, 6, 0)
 
     def _update_history_weather(self, past_entries):
-        """Update past weather display - optimized to reuse widgets"""
-        start_time = time.time()
+        """Update past weather display"""
         self.logger.info(f"Updating past weather display with {len(past_entries)} entries")
 
         past_weather_list = []
@@ -679,43 +674,20 @@ class GUI(QWidget):
 
         self.logger.info(f"Found {len(past_weather_list)} winner entries in past data")
 
-        # Reuse existing panel and widgets if possible
-        if self.past_weather_panel is None:
-            # Create panel only once
-            self.past_weather_panel = QWidget()
-            self.past_weather_panel.setObjectName('PastWeatherPanel')
-            layout = QGridLayout()
-            layout.setSpacing(10)
-            layout.setContentsMargins(0, 0, 0, 0)
-            self.past_weather_panel.setLayout(layout)
-            self.past_weather_scroll.setWidget(self.past_weather_panel)
-        
-        layout = self.past_weather_panel.layout()
-        
-        # Reuse or create widgets as needed
+        # Create the past weather panel
+        layout = QGridLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+
         for i, weather in enumerate(past_weather_list):
-            if i < len(self.past_weather_widgets):
-                # Reuse existing widget - update its content instead of recreating
-                widget = self.past_weather_widgets[i]
-                # Update the widget content (this assumes the widget has an update method)
-                # If not, we'll need to manually update its labels
-                self._update_past_weather_widget(widget, weather)
-            else:
-                # Create new widget only if needed
-                widget = self.ui_factory.create_past_weather_widget(weather, None)
-                self.past_weather_widgets.append(widget)
-                layout.addWidget(widget, i, 0)
-        
-        # Hide extra widgets if we have fewer entries than before
-        for i in range(len(past_weather_list), len(self.past_weather_widgets)):
-            self.past_weather_widgets[i].hide()
-        
-        # Show only the needed widgets
-        for i in range(len(past_weather_list)):
-            self.past_weather_widgets[i].show()
-        
-        elapsed = time.time() - start_time
-        self.logger.info(f"History weather update took {elapsed:.3f} seconds")
+            widget = self.ui_factory.create_past_weather_widget(weather, None)
+            layout.addWidget(widget, i, 0)
+
+        panel = QWidget()
+        panel.setObjectName('PastWeatherPanel')
+        panel.setLayout(layout)
+
+        self.past_weather_scroll.setWidget(panel)
     
     def _update_past_weather_widget(self, widget, weather):
         """Update an existing past weather widget with new data"""
