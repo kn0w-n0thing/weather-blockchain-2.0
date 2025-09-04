@@ -6,7 +6,6 @@ import psutil
 import signal
 import sqlite3
 import sys
-import time
 
 import requests
 from PyQt5.QtCore import QTimer, Qt
@@ -27,7 +26,7 @@ WEATHER_DB_PATH = "weather_data.db"
 LOGS_DB_PATH = "logs.db"
 FETCH_INTERVAL_MS = 5 * 60 * 1000  # 5 minutes
 MONITOR_INTERVAL_MS = 30 * 1000     # 30 seconds
-SIGNAL_CHECK_INTERVAL_MS = 2000     # 2 seconds (reduced from 500ms to save CPU)
+SIGNAL_CHECK_INTERVAL_MS = 500      # 500ms
 CPU_MONITOR_INTERVAL = 1            # CPU monitoring interval in seconds
 TOP_PROCESSES_COUNT = 5             # Number of top processes to display
 BYTES_TO_MB = 1024 * 1024          # Conversion factor
@@ -78,13 +77,6 @@ class GUI(QWidget):
         self.winner_id = None
         self.winner_icons = []
         self.current_weather_data = []
-        
-        # Widget caching for history panel
-        self.past_weather_widgets = []  # Cache widgets to avoid recreation
-        self.past_weather_panel = None  # Cache the panel itself
-        
-        # Database connection pooling
-        self.db_connection = None
 
         # Address to index mapping
         self.address_to_index = {}
@@ -255,28 +247,27 @@ class GUI(QWidget):
         self.setCursor(Qt.BlankCursor)
 
     def _init_database(self):
-        """Initialize SQLite database for weather data storage with connection pooling"""
+        """Initialize SQLite database for weather data storage"""
         try:
-            # Create persistent connection for the application lifecycle
-            self.db_connection = sqlite3.connect(WEATHER_DB_PATH, check_same_thread=False)
-            cursor = self.db_connection.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS weather_data (
-                    hour_timestamp INTEGER PRIMARY KEY,
-                    weather_json TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            self.db_connection.commit()
-            
-            self.logger.info("Weather database initialized with persistent connection")
+            # Initialize weather data database
+            with sqlite3.connect(WEATHER_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS weather_data (
+                        hour_timestamp INTEGER PRIMARY KEY,
+                        weather_json TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                ''')
+                conn.commit()
+                
+            self.logger.info("Weather database initialized successfully")
         except sqlite3.Error as e:
             self.logger.error(f"Database initialization error: {e}")
 
     def _fetch_weather_data(self, block_count=40):
         """Fetch weather data from API and store in the database"""
         try:
-            start_time = time.time()
             self.logger.info("Fetching latest weather data from blockchain API")
             
             # Get the latest weather records
@@ -307,10 +298,10 @@ class GUI(QWidget):
 
             # Store in the database and detect actual changes
             new_records = 0
-            # Use persistent connection instead of creating new one
-            cursor = self.db_connection.cursor()
-            
-            for block in cleaned_weather_blocks:
+            with sqlite3.connect(WEATHER_DB_PATH) as conn:
+                cursor = conn.cursor()
+                
+                for block in cleaned_weather_blocks:
                     hour_timestamp = block['time']
                     weather_json = json.dumps(block)
                     
@@ -345,10 +336,9 @@ class GUI(QWidget):
                         self.logger.error(f"Error inserting weather record: {e}")
                         continue
                 
-            self.db_connection.commit()
-            
-            elapsed = time.time() - start_time
-            self.logger.info(f"Stored {new_records} weather records in database (took {elapsed:.3f} seconds)")
+                conn.commit()
+                
+            self.logger.info(f"Stored {new_records} weather records in database")
             return new_records > 0
             
         except Exception as e:
@@ -358,19 +348,18 @@ class GUI(QWidget):
     def _refresh_gui_data(self):
         """Refresh GUI with data from the database"""
         try:
-            start_time = time.time()
             self.logger.info("Refreshing GUI with latest weather data")
             
             # Get the latest MAX_WEATHER_RECORDS from the database
-            # Use persistent connection instead of creating new one
-            cursor = self.db_connection.cursor()
-            cursor.execute('''
-                SELECT weather_json FROM weather_data 
-                ORDER BY hour_timestamp DESC 
-                LIMIT ?
-            ''', (MAX_WEATHER_RECORDS,))
-            
-            rows = cursor.fetchall()
+            with sqlite3.connect(WEATHER_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT weather_json FROM weather_data 
+                    ORDER BY hour_timestamp DESC 
+                    LIMIT ?
+                ''', (MAX_WEATHER_RECORDS,))
+                
+                rows = cursor.fetchall()
                 
             if not rows:
                 self.logger.warning("No weather data found in database")
@@ -403,26 +392,15 @@ class GUI(QWidget):
             if self.winner_id and self.gpio:
                 self.gpio.switch_condition(self.winner_id)
                 
-            elapsed = time.time() - start_time
-            self.logger.info(f"GUI refresh completed successfully (took {elapsed:.3f} seconds)")
+            self.logger.info("GUI refresh completed successfully")
 
         except Exception as e:
             self.logger.error(f"Error refreshing GUI data: {e}", exc_info=True)
 
     def _on_fetch_timer(self):
         """Timer callback that fetches data and refreshes GUI only if the database changed"""
-        start_time = time.time()
-        cpu_before = psutil.cpu_percent(interval=None)
-        mem_before = psutil.virtual_memory().percent
-        
         if self._fetch_weather_data():
             self._refresh_gui_data()
-        
-        cpu_after = psutil.cpu_percent(interval=None)
-        mem_after = psutil.virtual_memory().percent
-        elapsed = time.time() - start_time
-        
-        self.logger.info(f"Fetch timer cycle: {elapsed:.3f}s, CPU: {cpu_before:.1f}% -> {cpu_after:.1f}%, Memory: {mem_before:.1f}% -> {mem_after:.1f}%")
     
     def _monitor_system_resources(self):
         """Monitor and log CPU, memory usage and top resource-consuming applications"""
@@ -526,8 +504,7 @@ class GUI(QWidget):
         if not weather_blocks:
             return []
 
-        # Removed excessive JSON logging that causes high CPU/memory usage
-        # self.logger.debug(f"Weather block after cleaning:{json.dumps(weather_blocks, indent=2)}")
+        self.logger.info(f"Weather block after cleaning:{json.dumps(weather_blocks, indent=2)}")
 
         # Sort by timestamp from earliest to latest to easily find earliest in each hour
         sorted_blocks = sorted(weather_blocks, key=lambda x: x['time'])
@@ -563,8 +540,7 @@ class GUI(QWidget):
         cleaned_blocks = sorted(hourly_blocks.values(), key=lambda x: x['time'], reverse=True)
         
         self.logger.info(f"Cleaned {len(weather_blocks)} blocks into {len(cleaned_blocks)} hourly blocks")
-        # Removed excessive JSON logging that causes high CPU/memory usage
-        # self.logger.debug(f"Weather block after cleaning:{json.dumps(cleaned_blocks, indent=2)}")
+        self.logger.info(f"Weather block after cleaning:{json.dumps(cleaned_blocks, indent=2)}")
 
         return cleaned_blocks
 
@@ -588,7 +564,6 @@ class GUI(QWidget):
 
     def _update_current_weather(self, current_entry):
         """Update the current weather display"""
-        start_time = time.time()
         self.logger.info("Updating current weather display")
 
         timestamp = current_entry['time']
@@ -630,9 +605,6 @@ class GUI(QWidget):
         self.current_weather_data = weather_list
         self._set_background(self.winner_id)
         self._show_winner_icon(self.winner_id)
-        
-        elapsed = time.time() - start_time
-        self.logger.info(f"Current weather update took {elapsed:.3f} seconds")
 
     def _update_weather_panel(self, index, weather):
         """Update an individual weather panel"""
@@ -661,8 +633,7 @@ class GUI(QWidget):
         layout.addWidget(wind_widget, 6, 0)
 
     def _update_history_weather(self, past_entries):
-        """Update past weather display - optimized to reuse widgets"""
-        start_time = time.time()
+        """Update past weather display"""
         self.logger.info(f"Updating past weather display with {len(past_entries)} entries")
 
         past_weather_list = []
@@ -679,49 +650,20 @@ class GUI(QWidget):
 
         self.logger.info(f"Found {len(past_weather_list)} winner entries in past data")
 
-        # Reuse existing panel and widgets if possible
-        if self.past_weather_panel is None:
-            # Create panel only once
-            self.past_weather_panel = QWidget()
-            self.past_weather_panel.setObjectName('PastWeatherPanel')
-            layout = QGridLayout()
-            layout.setSpacing(10)
-            layout.setContentsMargins(0, 0, 0, 0)
-            self.past_weather_panel.setLayout(layout)
-            self.past_weather_scroll.setWidget(self.past_weather_panel)
-        
-        layout = self.past_weather_panel.layout()
-        
-        # Reuse or create widgets as needed
+        # Create the past weather panel
+        layout = QGridLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+
         for i, weather in enumerate(past_weather_list):
-            if i < len(self.past_weather_widgets):
-                # Reuse existing widget - update its content instead of recreating
-                widget = self.past_weather_widgets[i]
-                # Update the widget content (this assumes the widget has an update method)
-                # If not, we'll need to manually update its labels
-                self._update_past_weather_widget(widget, weather)
-            else:
-                # Create new widget only if needed
-                widget = self.ui_factory.create_past_weather_widget(weather, None)
-                self.past_weather_widgets.append(widget)
-                layout.addWidget(widget, i, 0)
-        
-        # Hide extra widgets if we have fewer entries than before
-        for i in range(len(past_weather_list), len(self.past_weather_widgets)):
-            self.past_weather_widgets[i].hide()
-        
-        # Show only the needed widgets
-        for i in range(len(past_weather_list)):
-            self.past_weather_widgets[i].show()
-        
-        elapsed = time.time() - start_time
-        self.logger.info(f"History weather update took {elapsed:.3f} seconds")
-    
-    def _update_past_weather_widget(self, widget, weather):
-        """Update an existing past weather widget with new data"""
-        # This is a placeholder - you'll need to implement based on widget structure
-        # For now, just recreate the widget content
-        pass
+            widget = self.ui_factory.create_past_weather_widget(weather, None)
+            layout.addWidget(widget, i, 0)
+
+        panel = QWidget()
+        panel.setObjectName('PastWeatherPanel')
+        panel.setLayout(layout)
+
+        self.past_weather_scroll.setWidget(panel)
 
     def closeEvent(self, event):
         """Clean up on close"""
@@ -729,11 +671,6 @@ class GUI(QWidget):
 
         if self.gpio:
             self.gpio.cleanup()
-        
-        # Close database connection
-        if self.db_connection:
-            self.db_connection.close()
-            
         event.accept()
 
 
