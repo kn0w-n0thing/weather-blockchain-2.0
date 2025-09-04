@@ -77,6 +77,9 @@ class GUI(QWidget):
         self.winner_id = None
         self.winner_icons = []
         self.current_weather_data = []
+        
+        # Database connection pooling
+        self.db_connection = None
 
         # Address to index mapping
         self.address_to_index = {}
@@ -247,21 +250,21 @@ class GUI(QWidget):
         self.setCursor(Qt.BlankCursor)
 
     def _init_database(self):
-        """Initialize SQLite database for weather data storage"""
+        """Initialize SQLite database for weather data storage with connection pooling"""
         try:
-            # Initialize weather data database
-            with sqlite3.connect(WEATHER_DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS weather_data (
-                        hour_timestamp INTEGER PRIMARY KEY,
-                        weather_json TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                ''')
-                conn.commit()
-                
-            self.logger.info("Weather database initialized successfully")
+            # Create persistent connection for the application lifecycle
+            self.db_connection = sqlite3.connect(WEATHER_DB_PATH, check_same_thread=False)
+            cursor = self.db_connection.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS weather_data (
+                    hour_timestamp INTEGER PRIMARY KEY,
+                    weather_json TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            self.db_connection.commit()
+            
+            self.logger.info("Weather database initialized with persistent connection")
         except sqlite3.Error as e:
             self.logger.error(f"Database initialization error: {e}")
 
@@ -298,10 +301,10 @@ class GUI(QWidget):
 
             # Store in the database and detect actual changes
             new_records = 0
-            with sqlite3.connect(WEATHER_DB_PATH) as conn:
-                cursor = conn.cursor()
-                
-                for block in cleaned_weather_blocks:
+            # Use persistent connection instead of creating new one
+            cursor = self.db_connection.cursor()
+            
+            for block in cleaned_weather_blocks:
                     hour_timestamp = block['time']
                     weather_json = json.dumps(block)
                     
@@ -336,7 +339,7 @@ class GUI(QWidget):
                         self.logger.error(f"Error inserting weather record: {e}")
                         continue
                 
-                conn.commit()
+            self.db_connection.commit()
                 
             self.logger.info(f"Stored {new_records} weather records in database")
             return new_records > 0
@@ -351,15 +354,15 @@ class GUI(QWidget):
             self.logger.info("Refreshing GUI with latest weather data")
             
             # Get the latest MAX_WEATHER_RECORDS from the database
-            with sqlite3.connect(WEATHER_DB_PATH) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT weather_json FROM weather_data 
-                    ORDER BY hour_timestamp DESC 
-                    LIMIT ?
-                ''', (MAX_WEATHER_RECORDS,))
-                
-                rows = cursor.fetchall()
+            # Use persistent connection instead of creating new one
+            cursor = self.db_connection.cursor()
+            cursor.execute('''
+                SELECT weather_json FROM weather_data 
+                ORDER BY hour_timestamp DESC 
+                LIMIT ?
+            ''', (MAX_WEATHER_RECORDS,))
+            
+            rows = cursor.fetchall()
                 
             if not rows:
                 self.logger.warning("No weather data found in database")
@@ -671,6 +674,11 @@ class GUI(QWidget):
 
         if self.gpio:
             self.gpio.cleanup()
+        
+        # Close database connection
+        if self.db_connection:
+            self.db_connection.close()
+            
         event.accept()
 
 
