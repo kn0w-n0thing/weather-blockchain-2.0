@@ -45,4 +45,11 @@ type Engine struct {
 	currentSlotWeatherData map[uint64]map[string]*weather.Data // slotID -> validatorID -> weatherData
 	weatherDataMutex       sync.RWMutex                        // Separate mutex for weather data
 	maxSlotHistory         int                                 // Maximum number of slots to keep in memory (default: 3)
+	
+	// Master node functionality
+	masterNodeID        string    // Address of the genesis block creator (permanent master node)
+	isMasterNode        bool      // Whether this node is the master node
+	masterNodeAuthority bool      // Emergency mode: prioritize master node's chain over longest chain
+	consensusFailureCnt int       // Counter for consecutive consensus failures
+	lastForkResolution  time.Time // Timestamp of last fork resolution attempt
 }

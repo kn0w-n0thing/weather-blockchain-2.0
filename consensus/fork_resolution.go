@@ -1145,3 +1145,307 @@ func (ce *Engine) cleanupStaleBlocks(newHead *block.Block) {
 		}).Info("Cleaned up stale pending blocks after reorganization")
 	}
 }
+
+// Master node authority fork resolution methods
+
+// followMasterNodeChain attempts to synchronize with and follow the master node's chain
+func (ce *Engine) followMasterNodeChain() {
+	log.WithFields(logger.Fields{
+		"masterNodeID":      ce.masterNodeID,
+		"masterAuthority":   ce.masterNodeAuthority,
+		"isMasterNode":      ce.isMasterNode,
+	}).Info("Starting master node chain following procedure")
+	
+	if ce.isMasterNode {
+		log.Info("This is the master node, no need to follow master node chain")
+		return
+	}
+	
+	if ce.masterNodeID == "" {
+		log.Error("Cannot follow master node chain: no master node ID available")
+		return
+	}
+	
+	// Step 1: Request chain status specifically from master node
+	masterNodeChainHead := ce.requestMasterNodeChainHead()
+	if masterNodeChainHead == nil {
+		log.Warn("Failed to get master node chain head, attempting peer discovery")
+		// Fallback to requesting chain with master node blocks from all peers
+		ce.requestChainWithMasterNodeBlocks()
+		return
+	}
+	
+	// Step 2: Compare our chain with master node's chain
+	currentHead := ce.blockchain.GetLatestBlock()
+	if currentHead == nil {
+		log.Error("No current blockchain head available for comparison")
+		return
+	}
+	
+	// Step 3: Determine if we need to follow master node's chain
+	shouldFollow := ce.shouldFollowMasterNodeChain(currentHead, masterNodeChainHead)
+	if !shouldFollow {
+		log.Info("Current chain is compatible with master node, no following needed")
+		ce.disableMasterNodeAuthority() // Consensus restored
+		return
+	}
+	
+	// Step 4: Perform master node chain following
+	if err := ce.performMasterNodeChainFollowing(masterNodeChainHead); err != nil {
+		log.WithError(err).Error("Failed to follow master node chain")
+		return
+	}
+	
+	// Step 5: Update fork resolution timestamp
+	ce.mutex.Lock()
+	ce.lastForkResolution = time.Now()
+	ce.mutex.Unlock()
+	
+	log.Info("Successfully followed master node chain, consensus failure resolved")
+}
+
+// requestMasterNodeChainHead requests the chain head specifically from the master node
+func (ce *Engine) requestMasterNodeChainHead() *block.Block {
+	log.WithField("masterNodeID", ce.masterNodeID).Debug("Requesting chain head from master node")
+	
+	peerGetter, ok := ce.networkBroadcaster.(interface{ GetPeers() map[string]string })
+	if !ok {
+		log.Error("Cannot access peers to find master node")
+		return nil
+	}
+	
+	peers := peerGetter.GetPeers()
+	
+	// Try to find master node among peers
+	masterNodeFound := false
+	for peerID, peerAddr := range peers {
+		if peerID == ce.masterNodeID {
+			log.WithFields(logger.Fields{
+				"masterNodeID": ce.masterNodeID,
+				"peerAddr":     peerAddr,
+			}).Info("Found master node among peers")
+			masterNodeFound = true
+			break
+		}
+	}
+	
+	if !masterNodeFound {
+		log.WithField("masterNodeID", ce.masterNodeID).Warn("Master node not found among current peers")
+		return nil
+	}
+	
+	// Request chain status specifically from master node
+	if chainRequester, ok := ce.networkBroadcaster.(interface{ 
+		RequestPeerChainStatus(string) (uint64, string, error) 
+	}); ok {
+		masterHeight, masterHeadHash, err := chainRequester.RequestPeerChainStatus(ce.masterNodeID)
+		if err != nil {
+			log.WithError(err).WithField("masterNodeID", ce.masterNodeID).Error("Failed to get chain status from master node")
+			return nil
+		}
+		
+		log.WithFields(logger.Fields{
+			"masterHeight":   masterHeight,
+			"masterHeadHash": masterHeadHash,
+		}).Info("Received master node chain status")
+		
+		// Try to find the master node's head block in our blockchain tree
+		masterHeadBlock := ce.blockchain.GetBlockByHashFast(masterHeadHash)
+		if masterHeadBlock != nil {
+			log.WithField("masterHeadHash", masterHeadHash).Debug("Found master node head block in local blockchain")
+			return masterHeadBlock
+		}
+		
+		// Master node head not found locally, request it from master node
+		log.WithField("masterHeadHash", masterHeadHash).Debug("Master node head not found locally, requesting block")
+		return ce.requestSpecificBlockFromMasterNode(masterHeadHash)
+	}
+	
+	log.Error("Network broadcaster doesn't support chain status requests")
+	return nil
+}
+
+// requestChainWithMasterNodeBlocks requests blocks from peers that contain master node validator signatures
+func (ce *Engine) requestChainWithMasterNodeBlocks() {
+	log.WithField("masterNodeID", ce.masterNodeID).Info("Requesting chain with master node blocks from all peers")
+	
+	// Request recent blocks that might contain master node signatures
+	currentHead := ce.blockchain.GetLatestBlock()
+	if currentHead == nil {
+		log.Error("No current head available for master node block requests")
+		return
+	}
+	
+	// Request blocks from a reasonable range around current height
+	startIndex := uint64(1)
+	if currentHead.Index > MaxReconciliationBlocks {
+		startIndex = currentHead.Index - MaxReconciliationBlocks
+	}
+	endIndex := currentHead.Index + FutureBlockBuffer
+	
+	log.WithFields(logger.Fields{
+		"startIndex": startIndex,
+		"endIndex":   endIndex,
+		"masterNodeID": ce.masterNodeID,
+	}).Info("Requesting block range to find master node blocks")
+	
+	ce.requestBlockRangeViaNetworkBroadcaster(startIndex, endIndex)
+}
+
+// shouldFollowMasterNodeChain determines if we should abandon our chain and follow master node
+func (ce *Engine) shouldFollowMasterNodeChain(currentHead, masterNodeHead *block.Block) bool {
+	log.WithFields(logger.Fields{
+		"currentHead":      currentHead.Hash,
+		"currentHeight":    currentHead.Index,
+		"masterNodeHead":   masterNodeHead.Hash,
+		"masterNodeHeight": masterNodeHead.Index,
+	}).Debug("Evaluating whether to follow master node chain")
+	
+	// Always follow master node if we're in authority mode and master node has recent blocks
+	if ce.masterNodeAuthority {
+		// Check if master node chain has any recent activity (blocks from master node)
+		if ce.hasMasterNodeBlocksInChain(masterNodeHead) {
+			log.Info("Master node authority mode: will follow master node chain with recent master node blocks")
+			return true
+		}
+		
+		// Even if no recent master node blocks, follow if significantly different
+		if masterNodeHead.Index != currentHead.Index || masterNodeHead.Hash != currentHead.Hash {
+			log.Info("Master node authority mode: will follow different master node chain")
+			return true
+		}
+	}
+	
+	return false
+}
+
+// hasMasterNodeBlocksInChain checks if the given chain contains blocks validated by the master node
+func (ce *Engine) hasMasterNodeBlocksInChain(head *block.Block) bool {
+	log.WithField("masterNodeID", ce.masterNodeID).Debug("Checking for master node blocks in chain")
+	
+	// Get the path from genesis to head
+	chainPath := head.GetPath()
+	
+	// Check last several blocks for master node signatures
+	recentBlocksToCheck := 10
+	if len(chainPath) < recentBlocksToCheck {
+		recentBlocksToCheck = len(chainPath)
+	}
+	
+	masterNodeBlockCount := 0
+	startIndex := len(chainPath) - recentBlocksToCheck
+	
+	for i := startIndex; i < len(chainPath); i++ {
+		block := chainPath[i]
+		if block.ValidatorAddress == ce.masterNodeID {
+			masterNodeBlockCount++
+			log.WithFields(logger.Fields{
+				"blockIndex":  block.Index,
+				"blockHash":   block.Hash,
+				"masterNodeID": ce.masterNodeID,
+			}).Debug("Found master node block in chain")
+		}
+	}
+	
+	hasMasterNodeBlocks := masterNodeBlockCount > 0
+	log.WithFields(logger.Fields{
+		"masterNodeBlockCount": masterNodeBlockCount,
+		"recentBlocksChecked":  recentBlocksToCheck,
+		"hasMasterNodeBlocks":  hasMasterNodeBlocks,
+	}).Debug("Master node block check completed")
+	
+	return hasMasterNodeBlocks
+}
+
+// performMasterNodeChainFollowing performs the actual chain reorganization to follow master node
+func (ce *Engine) performMasterNodeChainFollowing(masterNodeHead *block.Block) error {
+	log.WithFields(logger.Fields{
+		"masterNodeHead":   masterNodeHead.Hash,
+		"masterNodeHeight": masterNodeHead.Index,
+	}).Info("Performing master node chain following")
+	
+	currentHead := ce.blockchain.GetLatestBlock()
+	if currentHead == nil {
+		return fmt.Errorf("no current head available for master node following")
+	}
+	
+	// Find common ancestor between our chain and master node's chain
+	commonAncestor := ce.findCommonAncestor(currentHead, masterNodeHead)
+	if commonAncestor == nil {
+		log.Warn("No common ancestor found, performing full chain replacement")
+		return ce.performFullChainReplacement(masterNodeHead)
+	}
+	
+	log.WithFields(logger.Fields{
+		"commonAncestor":     commonAncestor.Hash,
+		"ancestorHeight":     commonAncestor.Index,
+		"blocksToRollback":   currentHead.Index - commonAncestor.Index,
+		"blocksToApply":      masterNodeHead.Index - commonAncestor.Index,
+	}).Info("Found common ancestor, performing partial chain reorganization")
+	
+	// Perform reorganization to master node's chain
+	blocksToRollback := ce.getBlocksToRollback(currentHead, commonAncestor)
+	blocksToApply := ce.getBlocksToApply(masterNodeHead, commonAncestor)
+	
+	if err := ce.executeChainReorganization(blocksToRollback, blocksToApply, masterNodeHead); err != nil {
+		return fmt.Errorf("failed to execute chain reorganization for master node following: %v", err)
+	}
+	
+	log.Info("Successfully reorganized chain to follow master node")
+	return nil
+}
+
+// performFullChainReplacement replaces the entire local chain with master node's chain
+func (ce *Engine) performFullChainReplacement(masterNodeHead *block.Block) error {
+	log.WithField("masterNodeHead", masterNodeHead.Hash).Warn("Performing full chain replacement with master node chain")
+	
+	// This is a drastic measure - replace our entire chain with master node's
+	// In a production system, this should include additional safety checks
+	
+	if err := ce.blockchain.SwitchToChain(masterNodeHead); err != nil {
+		return fmt.Errorf("failed to switch to master node chain: %v", err)
+	}
+	
+	// Clear all pending blocks and forks since we're starting fresh
+	ce.mutex.Lock()
+	ce.pendingBlocks = make(map[string]*block.Block)
+	ce.forks = make(map[uint64][]*block.Block)
+	ce.mutex.Unlock()
+	
+	// Save the new chain to disk
+	if err := ce.blockchain.SaveToDisk(); err != nil {
+		log.WithError(err).Error("Failed to save master node chain to disk")
+		return fmt.Errorf("failed to save master node chain: %v", err)
+	}
+	
+	log.Info("Full chain replacement with master node chain completed")
+	return nil
+}
+
+// requestSpecificBlockFromMasterNode requests a specific block from the master node
+func (ce *Engine) requestSpecificBlockFromMasterNode(blockHash string) *block.Block {
+	log.WithFields(logger.Fields{
+		"blockHash":    blockHash,
+		"masterNodeID": ce.masterNodeID,
+	}).Debug("Requesting specific block from master node")
+	
+	// In a full implementation, this would send a targeted block request to the master node
+	// For now, we'll use the general block request mechanism and wait for the block
+	
+	if blockRequester, ok := ce.networkBroadcaster.(interface{ 
+		RequestSpecificBlock(string, string) (*block.Block, error)
+	}); ok {
+		block, err := blockRequester.RequestSpecificBlock(ce.masterNodeID, blockHash)
+		if err != nil {
+			log.WithError(err).WithFields(logger.Fields{
+				"blockHash":    blockHash,
+				"masterNodeID": ce.masterNodeID,
+			}).Error("Failed to request specific block from master node")
+			return nil
+		}
+		return block
+	}
+	
+	log.Debug("Network broadcaster doesn't support specific block requests, using general mechanism")
+	return nil
+}

@@ -29,6 +29,9 @@ type Blockchain struct {
 	// Legacy support - maintained for backward compatibility
 	Blocks     []*Block
 	LatestHash string
+	
+	// Master node tracking
+	MasterNodeID string // Address of the genesis block creator (permanent master node)
 
 	mutex    sync.RWMutex
 	dataPath string
@@ -425,6 +428,8 @@ func (blockchain *Blockchain) loadBlocksFromDatabase() error {
 				continue
 			}
 			blockchain.Genesis = block
+			// Record the master node ID from genesis block
+			blockchain.MasterNodeID = block.ValidatorAddress
 		}
 
 		// Add to hash map and all blocks list
@@ -586,15 +591,19 @@ func (blockchain *Blockchain) AddBlock(block *Block) error {
 		blockchain.MainHead = block
 		blockchain.BlockByHash[block.Hash] = block
 		blockchain.Heads = []*Block{block}
+		
+		// Record the genesis creator as the master node
+		blockchain.MasterNodeID = block.ValidatorAddress
 
 		// Legacy support
 		blockchain.Blocks = append(blockchain.Blocks, block)
 		blockchain.LatestHash = block.Hash
 
 		log.WithFields(logger.Fields{
-			"blockHash": block.Hash,
-			"genesis":   true,
-		}).Info("Genesis block added to tree-based blockchain")
+			"blockHash":    block.Hash,
+			"genesis":      true,
+			"masterNodeID": blockchain.MasterNodeID,
+		}).Info("Genesis block added to tree-based blockchain, master node recorded")
 		return nil
 	}
 

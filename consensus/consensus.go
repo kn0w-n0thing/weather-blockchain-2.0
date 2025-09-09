@@ -1,6 +1,7 @@
 package consensus
 
 import (
+	"fmt"
 	"time"
 	"weather-blockchain/account"
 	"weather-blockchain/block"
@@ -11,6 +12,15 @@ import (
 
 var log = logger.Logger
 
+// Master node consensus constants
+const (
+	// Consensus failure detection thresholds
+	MaxForkCountThreshold      = 3               // Maximum number of forks before consensus failure
+	MaxPendingBlocksThreshold  = 5               // Maximum pending blocks before consensus failure  
+	ForkResolutionTimeout      = 5 * time.Minute // Maximum time for fork resolution before failure
+	DefaultMaxSlotHistory      = 3               // Default number of slots to keep in memory
+)
+
 // NewConsensusEngine creates a new consensus engine
 func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validatorSelection ValidatorSelection,
 	networkBroadcaster network.Broadcaster, weatherService WeatherService, validatorAccount *account.Account) *Engine {
@@ -19,6 +29,19 @@ func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validat
 		"validatorID": validatorAccount.Address,
 		"pubKeySize":  len(validatorAccount.Address),
 	}).Debug("Creating new consensus engine")
+
+	// Determine master node ID from genesis block
+	masterNodeID := ""
+	isMasterNode := false
+	if blockchain.Genesis != nil {
+		masterNodeID = blockchain.Genesis.ValidatorAddress
+		isMasterNode = (masterNodeID == validatorAccount.Address)
+		log.WithFields(logger.Fields{
+			"masterNodeID": masterNodeID,
+			"isMasterNode": isMasterNode,
+			"validatorID":  validatorAccount.Address,
+		}).Info("Master node identification completed")
+	}
 
 	engine := &Engine{
 		blockchain:             blockchain,
@@ -31,7 +54,14 @@ func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validat
 		pendingBlocks:          make(map[string]*block.Block),
 		forks:                  make(map[uint64][]*block.Block),
 		currentSlotWeatherData: make(map[uint64]map[string]*weather.Data),
-		maxSlotHistory:         3, // Keep only last 3 slots to prevent OOM
+		maxSlotHistory:         DefaultMaxSlotHistory,
+		
+		// Master node initialization
+		masterNodeID:        masterNodeID,
+		isMasterNode:        isMasterNode,
+		masterNodeAuthority: false,
+		consensusFailureCnt: 0,
+		lastForkResolution:  time.Now(),
 	}
 
 	log.WithField("validatorID", validatorAccount.Address).Info("Consensus engine created")
@@ -255,4 +285,104 @@ func (ce *Engine) CleanupOldWeatherData() {
 	ce.weatherDataMutex.Lock()
 	defer ce.weatherDataMutex.Unlock()
 	ce.cleanupOldWeatherDataUnsafe()
+}
+
+// Master node consensus failure detection and recovery methods
+
+// detectConsensusFailure detects when consensus is failing based on multiple criteria
+func (ce *Engine) detectConsensusFailure() bool {
+	ce.mutex.RLock()
+	defer ce.mutex.RUnlock()
+
+	// Get current blockchain state
+	forkCount := ce.blockchain.GetForkCount()
+	pendingCount := len(ce.pendingBlocks)
+	
+	// Criteria for consensus failure using constants instead of magic numbers
+	consensusFailure := false
+	reasons := make([]string, 0)
+	
+	if forkCount >= MaxForkCountThreshold {
+		consensusFailure = true
+		reasons = append(reasons, fmt.Sprintf("high fork count (%d >= %d)", forkCount, MaxForkCountThreshold))
+	}
+	
+	if pendingCount >= MaxPendingBlocksThreshold {
+		consensusFailure = true
+		reasons = append(reasons, fmt.Sprintf("high pending blocks (%d >= %d)", pendingCount, MaxPendingBlocksThreshold))
+	}
+	
+	// Check if fork resolution has been stuck for too long
+	if time.Since(ce.lastForkResolution) > ForkResolutionTimeout && (forkCount > 1 || pendingCount > 0) {
+		consensusFailure = true
+		reasons = append(reasons, fmt.Sprintf("fork resolution timeout (>%v)", ForkResolutionTimeout))
+	}
+	
+	if consensusFailure {
+		log.WithFields(logger.Fields{
+			"forkCount":         forkCount,
+			"pendingCount":      pendingCount,
+			"reasons":           reasons,
+			"masterNodeID":      ce.masterNodeID,
+			"isMasterNode":      ce.isMasterNode,
+			"lastResolution":    ce.lastForkResolution,
+		}).Warn("Consensus failure detected")
+	}
+	
+	return consensusFailure
+}
+
+// handleConsensusFailure handles consensus failure by enabling master node authority mode
+func (ce *Engine) handleConsensusFailure() {
+	ce.mutex.Lock()
+	defer ce.mutex.Unlock()
+	
+	if ce.isMasterNode {
+		log.Info("Master node detected consensus failure, continuing normal operation")
+		return
+	}
+	
+	if ce.masterNodeID == "" {
+		log.Warn("Consensus failure detected but no master node identified, continuing with longest chain rule")
+		return
+	}
+	
+	// Enable master node authority mode for non-master nodes
+	if !ce.masterNodeAuthority {
+		ce.masterNodeAuthority = true
+		ce.consensusFailureCnt++
+		
+		log.WithFields(logger.Fields{
+			"masterNodeID":        ce.masterNodeID,
+			"consensusFailureCount": ce.consensusFailureCnt,
+		}).Warn("Enabling master node authority mode due to consensus failure")
+		
+		// Trigger master node chain following
+		go ce.followMasterNodeChain()
+	}
+}
+
+// disableMasterNodeAuthority disables master node authority mode when consensus is restored
+func (ce *Engine) disableMasterNodeAuthority() {
+	ce.mutex.Lock()
+	defer ce.mutex.Unlock()
+	
+	if ce.masterNodeAuthority {
+		ce.masterNodeAuthority = false
+		log.Info("Consensus restored, disabling master node authority mode")
+	}
+}
+
+// GetMasterNodeStatus returns master node information
+func (ce *Engine) GetMasterNodeStatus() (string, bool, bool) {
+	ce.mutex.RLock()
+	defer ce.mutex.RUnlock()
+	return ce.masterNodeID, ce.isMasterNode, ce.masterNodeAuthority
+}
+
+// IsMasterNodeAuthorityEnabled checks if master node authority mode is active
+func (ce *Engine) IsMasterNodeAuthorityEnabled() bool {
+	ce.mutex.RLock()
+	defer ce.mutex.RUnlock()
+	return ce.masterNodeAuthority
 }
