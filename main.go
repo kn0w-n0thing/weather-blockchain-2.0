@@ -211,12 +211,20 @@ func initializeBlockchain(config *Config, acc *account.Account) (*block.Blockcha
 
 // createGenesisBlockchain creates a new blockchain with genesis block
 func createGenesisBlockchain(acc *account.Account) (*block.Blockchain, error) {
+	blockchain := block.NewBlockchain()
+	
+	// Try to load existing blockchain first
+	if err := blockchain.LoadFromDisk(); err == nil && blockchain.GetBlockCount() > 0 {
+		logger.Logger.Info("Genesis block already exists, using existing blockchain")
+		return blockchain, nil
+	}
+	
+	// Create genesis block only if it doesn't exist
 	genesisBlock, err := block.CreateGenesisBlock(acc)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create genesis block: %w", err)
 	}
 
-	blockchain := block.NewBlockchain()
 	if err := blockchain.AddBlock(genesisBlock); err != nil {
 		return nil, fmt.Errorf("failed to add genesis block: %w", err)
 	}
