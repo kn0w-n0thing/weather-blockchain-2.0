@@ -27,7 +27,7 @@ const (
 	ConnectionMaxLifetime = time.Hour // Connection lifetime
 
 	// Queue configuration
-	LogQueueBufferSize = 1000 // Buffer up to 1000 log entries
+	LogQueueBufferSize = 10000
 
 	// Directory permissions
 	LogDirPermissions = 0755 // Directory creation permissions
@@ -115,7 +115,7 @@ func NewDatabaseHook(dbPath string) (*DatabaseHook, error) {
 	return &DatabaseHook{AsyncDatabaseHook: asyncHook}, nil
 }
 
-// worker processes log requests asynchronously
+// worker processes log requests asynchronously with batching
 func (hook *AsyncDatabaseHook) worker() {
 	defer hook.wg.Done()
 
@@ -123,10 +123,23 @@ func (hook *AsyncDatabaseHook) worker() {
 	INSERT INTO logs (timestamp, level, message, function_name, file_name, line_number, fields)
 	VALUES (?, ?, ?, ?, ?, ?, ?)`
 
-	for {
-		select {
-		case logReq := <-hook.logQueue:
-			// Process the log request
+	batchInsertPrefix := `INSERT INTO logs (timestamp, level, message, function_name, file_name, line_number, fields) VALUES `
+
+	const batchSize = 50
+	const flushInterval = 100 * time.Millisecond
+	
+	batch := make([]LogRequest, 0, batchSize)
+	ticker := time.NewTicker(flushInterval)
+	defer ticker.Stop()
+
+	flushBatch := func() {
+		if len(batch) == 0 {
+			return
+		}
+
+		if len(batch) == 1 {
+			// Single insert for small batches
+			logReq := batch[0]
 			_, err := hook.db.Exec(insertSQL,
 				logReq.timestamp,
 				logReq.level,
@@ -137,15 +150,56 @@ func (hook *AsyncDatabaseHook) worker() {
 				logReq.fields,
 			)
 			if err != nil {
-				// Log to stderr to avoid infinite recursion
 				fmt.Fprintf(os.Stderr, "Failed to write log to database: %v\n", err)
 			}
+		} else {
+			// Batch insert for multiple entries
+			placeholders := make([]string, len(batch))
+			values := make([]interface{}, 0, len(batch)*7)
+
+			for i, logReq := range batch {
+				placeholders[i] = "(?, ?, ?, ?, ?, ?, ?)"
+				values = append(values,
+					logReq.timestamp,
+					logReq.level,
+					logReq.message,
+					logReq.functionName,
+					logReq.fileName,
+					logReq.lineNumber,
+					logReq.fields,
+				)
+			}
+
+			batchSQL := batchInsertPrefix + strings.Join(placeholders, ", ")
+			_, err := hook.db.Exec(batchSQL, values...)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Failed to batch write logs to database: %v\n", err)
+			}
+		}
+
+		batch = batch[:0] // Reset slice
+	}
+
+	for {
+		select {
+		case logReq := <-hook.logQueue:
+			batch = append(batch, logReq)
+			if len(batch) >= batchSize {
+				flushBatch()
+			}
+
+		case <-ticker.C:
+			flushBatch()
+
 		case <-hook.shutdownCh:
+			// Flush remaining batch
+			flushBatch()
+			
 			// Drain remaining logs before shutdown
 			for {
 				select {
 				case logReq := <-hook.logQueue:
-					hook.db.Exec(insertSQL,
+					_, err := hook.db.Exec(insertSQL,
 						logReq.timestamp,
 						logReq.level,
 						logReq.message,
@@ -154,6 +208,9 @@ func (hook *AsyncDatabaseHook) worker() {
 						logReq.lineNumber,
 						logReq.fields,
 					)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Failed to write remaining log to database: %v\n", err)
+					}
 				default:
 					return
 				}
