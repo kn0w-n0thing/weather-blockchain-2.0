@@ -325,15 +325,7 @@ class GUI(QWidget):
                                 VALUES (?, ?)
                             ''', (hour_timestamp, weather_json))
                             new_records += 1
-                        elif existing_row[0] != weather_json:
-                            # Data changed - update it
-                            cursor.execute('''
-                                UPDATE weather_data 
-                                SET weather_json = ?, created_at = CURRENT_TIMESTAMP
-                                WHERE hour_timestamp = ?
-                            ''', (weather_json, hour_timestamp))
-                            new_records += 1
-                        # If data is identical, do nothing
+                        # If data exists, do nothing
                         
                     except sqlite3.Error as e:
                         self.logger.error(f"Error inserting weather record: {e}")
