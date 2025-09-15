@@ -1514,15 +1514,3 @@ func (ce *Engine) requestMasterIntervention() {
 		}
 	}
 }
-
-// disableMasterNodeAuthority disables master node authority mode when consensus is restored
-func (ce *Engine) disableMasterNodeAuthority() {
-	ce.mutex.Lock()
-	defer ce.mutex.Unlock()
-
-	if ce.masterNodeAuthority {
-		log.Info("Disabling master node authority mode - consensus restored")
-		ce.masterNodeAuthority = false
-		ce.consensusFailureCnt = 0
-	}
-}
