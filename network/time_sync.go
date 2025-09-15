@@ -55,6 +55,10 @@ type TimeSync struct {
 	ValidatorID     string              // This node's validator ID
 	validatorSlot   map[uint64][]string // Map of slots to validators assigned to them
 	networkManager  Manager             // Reference to network manager for accessing peers
+
+	// CRITICAL FIX: Add time reliability tracking for fallback mechanism
+	timeReliable    bool      // Whether time synchronization is reliable
+	lastNTPFailure  time.Time // Last time NTP synchronization failed
 }
 
 var NtpServerSource = [3]string{
@@ -99,6 +103,10 @@ func NewTimeSync(networkManager Manager) *TimeSync {
 		ValidatorID:     validatorID,
 		validatorSlot:   make(map[uint64][]string),
 		networkManager:  networkManager,
+
+		// Initialize time reliability tracking
+		timeReliable:    true,              // Start as reliable until proven otherwise
+		lastNTPFailure:  time.Time{},       // Zero time indicates no failures yet
 	}
 
 	log.WithField("ValidatorID", timeSync.ValidatorID).Debug("NewTimeSync: Generated validator ID")
@@ -502,6 +510,7 @@ func (timeSync *TimeSync) runPeriodicSync() {
 
 		syncCount := 0
 		errorCount := 0
+		allSourcesFailed := true
 
 		// Sync with all external time sources
 		for addr := range timeSync.externalSources {
@@ -514,10 +523,35 @@ func (timeSync *TimeSync) runPeriodicSync() {
 				}).Warn("runPeriodicSync: Failed to sync with time source")
 			} else {
 				syncCount++
+				allSourcesFailed = false
 			}
 		}
 
 		timeSync.mutex.Lock()
+		if allSourcesFailed && len(timeSync.externalSources) > 0 {
+			// CRITICAL FIX: Explicit fallback to local time when all NTP sources fail
+			log.WithFields(logger.Fields{
+				"sourceCount": len(timeSync.externalSources),
+				"errorCount":  errorCount,
+			}).Warn("All NTP sources failed - falling back to local system time")
+
+			// Mark time as unreliable for timestamp validation
+			timeSync.timeReliable = false
+			timeSync.lastNTPFailure = time.Now()
+
+			// Reset offset to 0 (use local time)
+			oldOffset := timeSync.timeOffset
+			timeSync.timeOffset = 0
+
+			log.WithFields(logger.Fields{
+				"previousOffset": oldOffset,
+				"newOffset":      timeSync.timeOffset,
+				"fallbackActive": true,
+			}).Warn("Time synchronization fallback activated - using local system time")
+		} else {
+			// At least one NTP source succeeded
+			timeSync.timeReliable = true
+		}
 		timeSync.lastSyncTime = time.Now()
 		timeSync.mutex.Unlock()
 
@@ -526,6 +560,7 @@ func (timeSync *TimeSync) runPeriodicSync() {
 			"successCount": syncCount,
 			"errorCount":   errorCount,
 			"lastSyncTime": timeSync.lastSyncTime,
+			"timeReliable": timeSync.timeReliable,
 		}).Debug("runPeriodicSync: Completed time synchronization")
 	}
 }
