@@ -114,9 +114,24 @@ func (ce *Engine) resolveForks() {
 }
 
 // performConsensusReconciliation performs comprehensive consensus reconciliation after network recovery
+// CRITICAL FIX: Only master node can perform reconciliation to prevent multiple nodes acting as masters
 func (ce *Engine) performConsensusReconciliation() {
-	log.Info("Starting consensus reconciliation process")
-	
+	// MASTER NODE AUTHORITY CHECK - Only master node can trigger reconciliation
+	if !ce.isMasterNode {
+		log.WithFields(logger.Fields{
+			"masterNodeID": ce.masterNodeID,
+			"isMasterNode": ce.isMasterNode,
+			"validatorID":  ce.validatorID,
+		}).Info("Non-master node detected crisis, requesting master intervention")
+		ce.requestMasterIntervention()
+		return
+	}
+
+	log.WithFields(logger.Fields{
+		"masterNodeID": ce.masterNodeID,
+		"validatorID":  ce.validatorID,
+	}).Info("Master node starting network-wide consensus reconciliation process")
+
 	ce.mutex.Lock()
 	defer ce.mutex.Unlock()
 	
@@ -1448,4 +1463,66 @@ func (ce *Engine) requestSpecificBlockFromMasterNode(blockHash string) *block.Bl
 	
 	log.Debug("Network broadcaster doesn't support specific block requests, using general mechanism")
 	return nil
+}
+
+// requestMasterIntervention sends a crisis alert to the master node requesting intervention
+func (ce *Engine) requestMasterIntervention() {
+	log.WithFields(logger.Fields{
+		"masterNodeID": ce.masterNodeID,
+		"validatorID":  ce.validatorID,
+	}).Info("Requesting master node intervention for consensus crisis")
+
+	if ce.masterNodeID == "" {
+		log.Error("Cannot request master intervention: no master node ID available")
+		return
+	}
+
+	// Try to find and alert the master node
+	peerGetter, ok := ce.networkBroadcaster.(interface{ GetPeers() map[string]string })
+	if !ok {
+		log.Error("Cannot access peers to find master node for intervention")
+		return
+	}
+
+	peers := peerGetter.GetPeers()
+	masterNodeFound := false
+
+	for peerID := range peers {
+		if peerID == ce.masterNodeID {
+			masterNodeFound = true
+			break
+		}
+	}
+
+	if !masterNodeFound {
+		log.WithField("masterNodeID", ce.masterNodeID).Warn("Master node not found among current peers, cannot request intervention")
+		return
+	}
+
+	// Send crisis alert to master node (in a full implementation, this would use a specific message type)
+	log.WithField("masterNodeID", ce.masterNodeID).Info("Sending crisis alert to master node")
+
+	// For now, we use the chain status request as a way to alert the master node
+	// In a full implementation, there would be a dedicated "CrisisAlert" message
+	if statusBroadcaster, ok := ce.networkBroadcaster.(interface{
+		BroadcastChainStatusRequest(uint64, string)
+	}); ok {
+		latestBlock := ce.blockchain.GetLatestBlock()
+		if latestBlock != nil {
+			statusBroadcaster.BroadcastChainStatusRequest(latestBlock.Index, latestBlock.Hash)
+			log.Info("Crisis alert sent to master node via chain status request")
+		}
+	}
+}
+
+// disableMasterNodeAuthority disables master node authority mode when consensus is restored
+func (ce *Engine) disableMasterNodeAuthority() {
+	ce.mutex.Lock()
+	defer ce.mutex.Unlock()
+
+	if ce.masterNodeAuthority {
+		log.Info("Disabling master node authority mode - consensus restored")
+		ce.masterNodeAuthority = false
+		ce.consensusFailureCnt = 0
+	}
 }
