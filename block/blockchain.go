@@ -949,6 +949,24 @@ func (blockchain *Blockchain) GetLatestBlock() *Block {
 	return blockchain.Blocks[len(blockchain.Blocks)-1]
 }
 
+// GetGenesisBlock returns the genesis block (first block in the blockchain)
+func (blockchain *Blockchain) GetGenesisBlock() *Block {
+	blockchain.mutex.RLock()
+	defer blockchain.mutex.RUnlock()
+
+	// Try Genesis field first (tree-based blockchain)
+	if blockchain.Genesis != nil {
+		return blockchain.Genesis
+	}
+
+	// Fallback to legacy approach (array-based blockchain)
+	if len(blockchain.Blocks) > 0 {
+		return blockchain.Blocks[0]
+	}
+
+	return nil
+}
+
 // IsBlockValid checks if a block can be added to the chain
 func (blockchain *Blockchain) IsBlockValid(block *Block) error {
 	blockchain.mutex.RLock()

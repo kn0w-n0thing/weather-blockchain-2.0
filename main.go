@@ -401,6 +401,9 @@ func startNetworkBridge(consensusEngine *consensus.Engine, node *network.Node) {
 			"blockHash":  incomingBlock.Hash,
 		}).Debug("Bridge: Processing incoming block from network")
 
+		// Check if this block contains a consensus message and process it first
+		consensusEngine.OnConsensusMessageReceived(incomingBlock)
+
 		if err := consensusEngine.ReceiveBlock(incomingBlock); err != nil {
 			logger.Logger.WithFields(logger.Fields{
 				"blockIndex": incomingBlock.Index,

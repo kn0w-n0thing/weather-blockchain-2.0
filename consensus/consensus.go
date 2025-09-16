@@ -30,18 +30,8 @@ func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validat
 		"pubKeySize":  len(validatorAccount.Address),
 	}).Debug("Creating new consensus engine")
 
-	// Determine master node ID from genesis block
-	masterNodeID := ""
-	isMasterNode := false
-	if blockchain.Genesis != nil {
-		masterNodeID = blockchain.Genesis.ValidatorAddress
-		isMasterNode = (masterNodeID == validatorAccount.Address)
-		log.WithFields(logger.Fields{
-			"masterNodeID": masterNodeID,
-			"isMasterNode": isMasterNode,
-			"validatorID":  validatorAccount.Address,
-		}).Info("Master node identification completed")
-	}
+	// Master node ID will be determined dynamically from database when needed
+	// This eliminates initialization timing issues
 
 	engine := &Engine{
 		blockchain:             blockchain,
@@ -55,10 +45,10 @@ func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validat
 		forks:                  make(map[uint64][]*block.Block),
 		currentSlotWeatherData: make(map[uint64]map[string]*weather.Data),
 		maxSlotHistory:         DefaultMaxSlotHistory,
-		
-		// Master node initialization
-		masterNodeID:        masterNodeID,
-		isMasterNode:        isMasterNode,
+
+		// Master node fields will be determined dynamically
+		masterNodeID:        "", // Will be queried from database when needed
+		isMasterNode:        false, // Will be determined dynamically
 		masterNodeAuthority: false,
 		consensusFailureCnt: 0,
 		lastForkResolution:  time.Now(),
@@ -319,12 +309,15 @@ func (ce *Engine) detectConsensusFailure() bool {
 	}
 	
 	if consensusFailure {
+		masterNodeID := ce.getMasterNodeID()
+		isMasterNode := ce.isMasterNodeDynamic()
+
 		log.WithFields(logger.Fields{
 			"forkCount":         forkCount,
 			"pendingCount":      pendingCount,
 			"reasons":           reasons,
-			"masterNodeID":      ce.masterNodeID,
-			"isMasterNode":      ce.isMasterNode,
+			"masterNodeID":      masterNodeID,
+			"isMasterNode":      isMasterNode,
 			"lastResolution":    ce.lastForkResolution,
 		}).Warn("Consensus failure detected")
 	}
@@ -336,48 +329,63 @@ func (ce *Engine) detectConsensusFailure() bool {
 func (ce *Engine) handleConsensusFailure() {
 	ce.mutex.Lock()
 	defer ce.mutex.Unlock()
-	
-	if ce.isMasterNode {
+
+	// Use dynamic master node detection
+	masterNodeID := ce.getMasterNodeID()
+	isMasterNode := ce.isMasterNodeDynamic()
+
+	if isMasterNode {
 		log.Info("Master node detected consensus failure, continuing normal operation")
 		return
 	}
-	
-	if ce.masterNodeID == "" {
+
+	if masterNodeID == "" {
 		log.Warn("Consensus failure detected but no master node identified, continuing with longest chain rule")
 		return
 	}
-	
+
 	// Enable master node authority mode for non-master nodes
 	if !ce.masterNodeAuthority {
 		ce.masterNodeAuthority = true
 		ce.consensusFailureCnt++
-		
+
 		log.WithFields(logger.Fields{
-			"masterNodeID":        ce.masterNodeID,
+			"masterNodeID":        masterNodeID,
 			"consensusFailureCount": ce.consensusFailureCnt,
 		}).Warn("Enabling master node authority mode due to consensus failure")
-		
+
 		// Trigger master node chain following
 		go ce.followMasterNodeChain()
 	}
 }
 
-// disableMasterNodeAuthority disables master node authority mode when consensus is restored
-func (ce *Engine) disableMasterNodeAuthority() {
-	ce.mutex.Lock()
-	defer ce.mutex.Unlock()
-	
-	if ce.masterNodeAuthority {
-		ce.masterNodeAuthority = false
-		log.Info("Consensus restored, disabling master node authority mode")
+
+// getMasterNodeID dynamically queries the master node ID from the genesis block
+func (ce *Engine) getMasterNodeID() string {
+	// Try to get genesis block from the blockchain
+	genesisBlock := ce.blockchain.GetGenesisBlock()
+	if genesisBlock != nil {
+		return genesisBlock.ValidatorAddress
 	}
+	return ""
+}
+
+// isMasterNodeDynamic dynamically determines if this node is the master node
+func (ce *Engine) isMasterNodeDynamic() bool {
+	masterNodeID := ce.getMasterNodeID()
+	return masterNodeID != "" && masterNodeID == ce.validatorID
 }
 
 // GetMasterNodeStatus returns master node information
 func (ce *Engine) GetMasterNodeStatus() (string, bool, bool) {
 	ce.mutex.RLock()
 	defer ce.mutex.RUnlock()
-	return ce.masterNodeID, ce.isMasterNode, ce.masterNodeAuthority
+
+	// Get current values dynamically
+	masterNodeID := ce.getMasterNodeID()
+	isMasterNode := ce.isMasterNodeDynamic()
+
+	return masterNodeID, isMasterNode, ce.masterNodeAuthority
 }
 
 // IsMasterNodeAuthorityEnabled checks if master node authority mode is active
@@ -385,4 +393,21 @@ func (ce *Engine) IsMasterNodeAuthorityEnabled() bool {
 	ce.mutex.RLock()
 	defer ce.mutex.RUnlock()
 	return ce.masterNodeAuthority
+}
+
+// disableMasterNodeAuthority disables master node authority mode (returns to normal consensus)
+func (ce *Engine) disableMasterNodeAuthority() {
+	ce.mutex.Lock()
+	defer ce.mutex.Unlock()
+
+	if ce.masterNodeAuthority {
+		ce.masterNodeAuthority = false
+		ce.consensusFailureCnt = 0
+		ce.onlyAcceptMasterBlocks = false
+
+		log.WithFields(logger.Fields{
+			"masterNodeID": ce.getMasterNodeID(),
+			"validatorID":  ce.validatorID,
+		}).Info("Master node authority mode disabled, returning to normal consensus")
+	}
 }
