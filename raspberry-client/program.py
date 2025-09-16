@@ -392,8 +392,27 @@ class GUI(QWidget):
         except Exception as e:
             self.logger.error(f"Error refreshing GUI data: {e}", exc_info=True)
 
+    def _discover_nodes(self):
+        """Discover and update online nodes before fetching weather data"""
+        try:
+            discover_url = f"{self.api_base_url}/api/nodes/discover"
+            response = requests.get(discover_url, timeout=10)
+            response.raise_for_status()
+            self.logger.info("Successfully updated online nodes list")
+            return True
+        except requests.exceptions.RequestException as e:
+            self.logger.warning(f"Failed to discover nodes: {e}")
+            return False
+        except Exception as e:
+            self.logger.error(f"Error during node discovery: {e}")
+            return False
+
     def _on_fetch_timer(self):
-        """Timer callback that fetches data and refreshes GUI only if the database changed"""
+        """Timer callback that discovers nodes, fetches data and refreshes GUI only if the database changed"""
+        # First discover online nodes
+        self._discover_nodes()
+        
+        # Then fetch weather data
         if self._fetch_weather_data():
             self._refresh_gui_data()
     
