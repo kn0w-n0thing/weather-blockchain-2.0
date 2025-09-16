@@ -113,7 +113,8 @@ class GUI(QWidget):
         # Setup system monitor timer
         self.monitor_timer.setInterval(MONITOR_INTERVAL_MS)
         self.monitor_timer.timeout.connect(self._monitor_system_resources)
-        self.monitor_timer.start()
+        # turn off the monitor timer
+        # self.monitor_timer.start()
 
         self.logger.info("Weather Display initialization complete")
 
