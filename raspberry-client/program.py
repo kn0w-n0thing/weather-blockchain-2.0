@@ -385,8 +385,11 @@ class GUI(QWidget):
                 self._update_history_weather([])
 
             # Apply styling and activate GPIO
-            if self.winner_id and self.gpio:
-                self.gpio.switch_condition(self.winner_id)
+            if self.winner_id is not None and self.gpio:
+                # Convert winner_id (index) back to address to access the data
+                winner_address = self.index_to_address.get(self.winner_id)
+                if winner_address and winner_address in weather_blocks[0]["data"]:
+                    self.gpio.switch_condition(weather_blocks[0]["data"][winner_address]["Id"])
                 
             self.logger.info("GUI refresh completed successfully")
 
@@ -567,7 +570,10 @@ class GUI(QWidget):
             'ff56a228e2489ae8701fe6dc0dce61fbddfa6d46': 1,
             '88a7337041a2a847cb877e22c6423428ef5cc0ed': 2
         }
+        # Create reverse mapping for quick lookup
+        self.index_to_address = {v: k for k, v in self.address_to_index.items()}
         self.logger.info(f"Loaded address mappings: {self.address_to_index}")
+        self.logger.info(f"Loaded reverse mappings: {self.index_to_address}")
 
     def _get_index_from_address(self, address):
         """Convert validator address to display index (0-2)"""
