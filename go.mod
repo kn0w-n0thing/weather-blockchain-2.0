@@ -4,13 +4,12 @@ go 1.24
 
 require (
 	github.com/beevik/ntp v1.4.3
-	github.com/kn0w-n0thing/mdns v1.0.6
 	github.com/joho/godotenv v1.5.1
+	github.com/kn0w-n0thing/mdns v1.0.6
 	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.10.0
 	github.com/urfave/cli/v2 v2.27.6
-	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
 require (

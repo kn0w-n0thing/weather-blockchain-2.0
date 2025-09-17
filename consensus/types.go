@@ -57,6 +57,18 @@ type Engine struct {
 	// Master override tracking
 	pendingOverrides map[string]chan MasterOverrideAck // requestID -> response channel
 	overrideMutex    sync.RWMutex                      // Protects pendingOverrides
+
+	// Synchronization for consensus reconciliation
+	chainStatusResponses map[string]*ChainStatusResponse // peerID -> chain status
+	chainStatusMutex     sync.RWMutex                    // Protects chainStatusResponses
+	chainStatusWaitGroup sync.WaitGroup                  // Waits for chain status responses
+	reconciliationDone   chan bool                       // Signals completion of reconciliation
+
+	// Block synchronization tracking
+	syncInProgress    bool                   // Whether emergency sync is in progress
+	syncMutex         sync.RWMutex           // Protects sync state
+	blockSyncComplete chan bool              // Signals block sync completion
+	expectedSyncBlocks map[string]bool       // Tracks expected blocks during sync
 }
 
 // Constants for master node reconciliation
@@ -64,6 +76,9 @@ const (
 	MasterOverrideTimeoutSeconds = 30  // Maximum time to wait for nodes to acknowledge override
 	ChainResetAckTimeoutSeconds  = 15  // Maximum time to wait for chain reset acknowledgments
 	MaxReconciliationRetries     = 3   // Maximum number of reconciliation retry attempts
+	ChainStatusTimeout          = 10   // Maximum time to wait for chain status responses (seconds)
+	BlockSyncTimeout           = 30    // Maximum time to wait for block synchronization (seconds)
+	BlockBroadcastDelay        = 50    // Delay between block broadcasts in milliseconds
 )
 
 // MasterOverrideMessage represents a master node override command
@@ -84,4 +99,12 @@ type MasterOverrideAck struct {
 	Success     bool   `json:"success"`
 	Error       string `json:"error,omitempty"`
 	ChainHeight uint64 `json:"chainHeight"`
+}
+
+// ChainStatusResponse represents a chain status response from a peer
+type ChainStatusResponse struct {
+	PeerID    string `json:"peerID"`
+	Height    uint64 `json:"height"`
+	HeadHash  string `json:"headHash"`
+	Timestamp time.Time `json:"timestamp"`
 }

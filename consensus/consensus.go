@@ -52,6 +52,13 @@ func NewConsensusEngine(blockchain *block.Blockchain, timeSync TimeSync, validat
 		masterNodeAuthority: false,
 		consensusFailureCnt: 0,
 		lastForkResolution:  time.Now(),
+
+		// Initialize synchronization structures
+		chainStatusResponses: make(map[string]*ChainStatusResponse),
+		reconciliationDone:   make(chan bool, 1),
+		blockSyncComplete:    make(chan bool, 1),
+		expectedSyncBlocks:   make(map[string]bool),
+		syncInProgress:       false,
 	}
 
 	log.WithField("validatorID", validatorAccount.Address).Info("Consensus engine created")

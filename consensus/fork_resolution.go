@@ -142,15 +142,17 @@ func (ce *Engine) performConsensusReconciliation() {
 	// Step 1: Check if peers have significantly longer chains and perform emergency sync if needed
 	if ce.detectAndHandleChainHeightGap() {
 		log.Info("Emergency chain synchronization completed, restarting reconciliation")
-		// Restart reconciliation after emergency sync
-		time.Sleep(2 * time.Second)
+		// Wait for sync completion signal instead of arbitrary sleep
+		select {
+		case <-ce.blockSyncComplete:
+			log.Info("Block synchronization signaled completion")
+		case <-time.After(2 * time.Second):
+			log.Info("Proceeding after sync timeout")
+		}
 	}
 
-	// Step 2: Request chain information from all peers
-	ce.requestChainStatusFromPeers()
-
-	// Step 3: Wait for responses and collect chain information
-	time.Sleep(5 * time.Second) // Allow time for responses
+	// Step 2: Request chain information from all peers and wait for responses
+	ce.requestChainStatusFromPeersAndWait()
 
 	// Step 4: Identify and resolve potential forks
 	ce.identifyAndResolveForks()
@@ -421,8 +423,11 @@ func (ce *Engine) broadcastCanonicalChain(canonicalHeight uint64, canonicalHash 
 
 	for _, blockToShare := range blocksToShare {
 		ce.networkBroadcaster.BroadcastBlock(blockToShare)
-		// Small delay to prevent network congestion
-		time.Sleep(100 * time.Millisecond)
+		// Rate-limited delay to prevent network congestion
+		select {
+		case <-time.After(time.Duration(BlockBroadcastDelay) * time.Millisecond):
+			// Continue with next block
+		}
 	}
 }
 
@@ -541,7 +546,112 @@ func (ce *Engine) createMessageBlock(messageType string, data []byte) *block.Blo
 	return messageBlock
 }
 
-// requestChainStatusFromPeers requests chain status from all connected peers
+// requestChainStatusFromPeersAndWait requests chain status from peers and waits for responses with proper synchronization
+func (ce *Engine) requestChainStatusFromPeersAndWait() {
+	log.Info("Requesting chain status from all peers with synchronization")
+
+	peerGetter, ok := ce.networkBroadcaster.(interface{ GetPeers() map[string]string })
+	if !ok {
+		log.Error("Cannot access peers for chain status request")
+		return
+	}
+
+	peers := peerGetter.GetPeers()
+	latestBlock := ce.blockchain.GetLatestBlock()
+
+	if latestBlock == nil {
+		log.Error("No latest block found for chain status comparison")
+		return
+	}
+
+	// Initialize sync structures
+	ce.chainStatusMutex.Lock()
+	if ce.chainStatusResponses == nil {
+		ce.chainStatusResponses = make(map[string]*ChainStatusResponse)
+	}
+	// Clear old responses
+	ce.chainStatusResponses = make(map[string]*ChainStatusResponse)
+	ce.chainStatusMutex.Unlock()
+
+	// Set up wait group for expected responses
+	ce.chainStatusWaitGroup.Add(len(peers))
+
+	log.WithFields(logger.Fields{
+		"peerCount":        len(peers),
+		"localChainHeight": latestBlock.Index,
+		"localLatestHash":  latestBlock.Hash,
+	}).Info("Broadcasting chain status request with sync")
+
+	// Broadcast our chain status and request others
+	if statusBroadcaster, ok := ce.networkBroadcaster.(interface {
+		BroadcastChainStatusRequest(uint64, string)
+	}); ok {
+		statusBroadcaster.BroadcastChainStatusRequest(latestBlock.Index, latestBlock.Hash)
+	}
+
+	// Wait for responses with timeout
+	done := make(chan bool, 1)
+	go func() {
+		ce.chainStatusWaitGroup.Wait()
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		log.Info("All chain status responses received")
+	case <-time.After(time.Duration(ChainStatusTimeout) * time.Second):
+		log.Warn("Chain status request timeout, proceeding with partial responses")
+	}
+
+	// Process collected responses
+	ce.processChainStatusResponses()
+}
+
+// processChainStatusResponses analyzes collected chain status responses
+func (ce *Engine) processChainStatusResponses() {
+	ce.chainStatusMutex.RLock()
+	defer ce.chainStatusMutex.RUnlock()
+
+	log.WithField("responseCount", len(ce.chainStatusResponses)).Info("Processing chain status responses")
+
+	// Analyze responses to detect chain discrepancies
+	for peerID, response := range ce.chainStatusResponses {
+		log.WithFields(logger.Fields{
+			"peerID":     peerID,
+			"peerHeight": response.Height,
+			"peerHead":   response.HeadHash,
+		}).Debug("Chain status response")
+	}
+}
+
+// OnChainStatusReceived handles chain status responses from peers
+func (ce *Engine) OnChainStatusReceived(peerID string, height uint64, headHash string) {
+	ce.chainStatusMutex.Lock()
+	defer ce.chainStatusMutex.Unlock()
+
+	if ce.chainStatusResponses == nil {
+		ce.chainStatusResponses = make(map[string]*ChainStatusResponse)
+	}
+
+	// Store the response
+	ce.chainStatusResponses[peerID] = &ChainStatusResponse{
+		PeerID:    peerID,
+		Height:    height,
+		HeadHash:  headHash,
+		Timestamp: time.Now(),
+	}
+
+	log.WithFields(logger.Fields{
+		"peerID":     peerID,
+		"peerHeight": height,
+		"peerHead":   headHash,
+	}).Debug("Chain status response received")
+
+	// Signal wait group that one response was received
+	ce.chainStatusWaitGroup.Done()
+}
+
+// requestChainStatusFromPeers requests chain status from all connected peers (legacy method)
 func (ce *Engine) requestChainStatusFromPeers() {
 	log.Info("Requesting chain status from all peers")
 
@@ -1450,8 +1560,13 @@ func (ce *Engine) performEmergencyChainSync(targetHeight uint64) bool {
 		// Request this batch of blocks from peers
 		ce.requestBlockRangeViaNetworkBroadcaster(startIndex, endIndex)
 
-		// Allow time for blocks to be received and processed
-		time.Sleep(3 * time.Second)
+		// Wait for block sync completion or timeout
+		select {
+		case <-ce.blockSyncComplete:
+			log.Debug("Block sync batch completed via signal")
+		case <-time.After(3 * time.Second):
+			log.Debug("Block sync batch timeout, continuing")
+		}
 
 		// Check if we successfully received blocks in this batch
 		newLatestBlock := ce.blockchain.GetLatestBlock()
@@ -1468,8 +1583,13 @@ func (ce *Engine) performEmergencyChainSync(targetHeight uint64) bool {
 				"currentHeight":    newLatestBlock.Index,
 			}).Warn("Emergency sync batch may have failed or is still processing")
 
-			// Give additional time for processing
-			time.Sleep(2 * time.Second)
+			// Give additional time for processing with proper timeout
+			select {
+			case <-ce.blockSyncComplete:
+				log.Debug("Additional processing completed via signal")
+			case <-time.After(2 * time.Second):
+				log.Debug("Additional processing timeout, continuing")
+			}
 		}
 	}
 
@@ -2066,7 +2186,10 @@ func (ce *Engine) processMasterOverrideCommand(msg *MasterOverrideMessage) {
 
 	// Enter master authority mode
 	ce.mutex.Lock()
-	ce.masterNodeAuthority = true
+	if !ce.masterNodeAuthority {
+		ce.masterNodeAuthority = true
+		ce.consensusFailureCnt++ // Increment failure counter when enabling authority mode
+	}
 	if msg.ForceSync {
 		ce.onlyAcceptMasterBlocks = true
 	}
@@ -2146,8 +2269,13 @@ func (ce *Engine) performMasterOverrideChainSync(canonicalHeight uint64, canonic
 		return false
 	}
 
-	// Wait a moment for blocks to be received and processed
-	time.Sleep(3 * time.Second)
+	// Wait for block synchronization to complete with timeout
+	select {
+	case <-ce.blockSyncComplete:
+		log.Debug("Block synchronization completed via signal")
+	case <-time.After(time.Duration(BlockSyncTimeout) * time.Second):
+		log.Warn("Block synchronization timeout, proceeding with current state")
+	}
 
 	// Try to find the canonical block again
 	canonicalBlock = ce.blockchain.GetBlockByHashFast(canonicalHash)
