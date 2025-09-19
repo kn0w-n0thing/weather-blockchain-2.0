@@ -43,7 +43,7 @@ func NewNodeClient() *NodeClient {
 
 	return &NodeClient{
 		discoveredNodes: make(map[string]NodeInfo),
-		serviceName:     "_weather_blockchain_p2p_node._tcp",
+		serviceName:     "_weather_blockchain_p2p_api._tcp",
 		domain:          "local.",
 	}
 }
@@ -64,8 +64,8 @@ func (nc *NodeClient) DiscoverNodes() error {
 
 	// Query for blockchain nodes
 	params := &mdns.QueryParam{
-		Service:     nc.serviceName,
-		Domain:      nc.domain,
+		Service:     "_weather_blockchain_p2p_node._tcp",
+		Domain:      "local.",
 		Timeout:     3 * time.Second,
 		Entries:     entriesCh,
 		DisableIPv6: true,
@@ -73,8 +73,8 @@ func (nc *NodeClient) DiscoverNodes() error {
 	}
 
 	log.WithFields(logrus.Fields{
-		"service": nc.serviceName,
-		"domain":  nc.domain,
+		"service": params.Service,
+		"domain":  params.Domain,
 		"timeout": params.Timeout,
 	}).Debug("Starting mDNS query for blockchain nodes")
 
