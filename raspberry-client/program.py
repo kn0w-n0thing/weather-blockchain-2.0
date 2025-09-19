@@ -101,6 +101,9 @@ class GUI(QWidget):
         self._setup_ui()
         self._init_window()
 
+        # First discover online nodes
+        self._discover_nodes()
+
         # Initial data fetch and GUI refresh
         if self._fetch_weather_data():
             self._refresh_gui_data()
@@ -400,7 +403,7 @@ class GUI(QWidget):
         """Discover and update online nodes before fetching weather data"""
         try:
             discover_url = f"{self.api_base_url}/api/nodes/discover"
-            response = requests.get(discover_url, timeout=10)
+            response = requests.post(discover_url, timeout=10)
             response.raise_for_status()
             self.logger.info("Successfully updated online nodes list")
             return True
