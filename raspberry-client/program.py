@@ -693,13 +693,26 @@ class GUI(QWidget):
         """Clean up on close"""
         self.logger.info("Application closing, cleaning up resources")
 
-        if self.gpio:
+        # Clean up timers
+        if hasattr(self, 'fetch_timer') and self.fetch_timer:
+            self.fetch_timer.stop()
+        if hasattr(self, 'monitor_timer') and self.monitor_timer:
+            self.monitor_timer.stop()
+        if hasattr(self, 'data_timer') and self.data_timer:
+            self.data_timer.stop()
+
+        # Clean up GPIO (currently commented out but structure ready)
+        if hasattr(self, 'gpio') and self.gpio:
             self.gpio.cleanup()
-        
+
         # Close database connection
-        if self.db_connection:
-            self.db_connection.close()
-            
+        if hasattr(self, 'db_connection') and self.db_connection:
+            try:
+                self.db_connection.close()
+                self.logger.info("Database connection closed successfully")
+            except Exception as e:
+                self.logger.error(f"Error closing database connection: {e}")
+
         event.accept()
 
 
