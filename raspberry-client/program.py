@@ -44,6 +44,15 @@ faulthandler.enable()
 def signal_handler(sig, frame):
     logger = logging.getLogger(__name__)
     logger.info("Ctrl-C pressed! Shutting down...")
+
+    # Get the main window and close it properly to trigger cleanup
+    app = QApplication.instance()
+    if app:
+        for widget in app.topLevelWidgets():
+            if isinstance(widget, GUI):
+                widget.close()
+                break
+
     QApplication.quit()
 
 
