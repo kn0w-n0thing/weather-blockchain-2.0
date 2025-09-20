@@ -43,7 +43,7 @@ class GPIOController:
         condition_names = list(self.CONDITION_PINS.keys())
 
         for i, (pin, name) in enumerate(zip(pins, condition_names)):
-            if i == condition_id:
+            if i == int(condition_id):
                 GPIO.output(pin, GPIO.HIGH)
                 logger.info(f"Condition {i} ({name}) is ON - pin {pin}")
             else:
