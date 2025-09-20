@@ -105,8 +105,8 @@ class GUI(QWidget):
         self._discover_nodes()
 
         # Initial data fetch and GUI refresh
-        if self._fetch_weather_data():
-            self._refresh_gui_data()
+        self._fetch_weather_data()
+        self._refresh_gui_data()
         
         # Setup fetch timer that only refreshes GUI when the database changes
         self.fetch_timer.setInterval(FETCH_INTERVAL_MS)
