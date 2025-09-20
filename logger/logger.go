@@ -30,6 +30,10 @@ const (
 	// Queue configuration
 	LogQueueBufferSize = 10000
 
+	// Data retention
+	LogRetentionDays = 30             // Keep logs for 30 days
+	CleanupInterval  = 24 * time.Hour // Run cleanup daily
+
 	// Directory permissions
 	LogDirPermissions = 0755 // Directory creation permissions
 )
@@ -103,6 +107,10 @@ func NewAsyncDatabaseHook(dbPath string) (*AsyncDatabaseHook, error) {
 	// Start the async worker
 	hook.wg.Add(1)
 	go hook.worker()
+
+	// Start cleanup routine for old logs (retain 1 month)
+	hook.wg.Add(1)
+	go hook.cleanupWorker()
 
 	return hook, nil
 }
@@ -217,6 +225,41 @@ func (hook *AsyncDatabaseHook) worker() {
 				}
 			}
 		}
+	}
+}
+
+// cleanupWorker periodically removes old log entries
+func (hook *AsyncDatabaseHook) cleanupWorker() {
+	defer hook.wg.Done()
+
+	ticker := time.NewTicker(CleanupInterval)
+	defer ticker.Stop()
+
+	// Run initial cleanup
+	hook.cleanupOldLogs()
+
+	for {
+		select {
+		case <-ticker.C:
+			hook.cleanupOldLogs()
+		case <-hook.shutdownCh:
+			return
+		}
+	}
+}
+
+// cleanupOldLogs removes log entries older than LogRetentionDays
+func (hook *AsyncDatabaseHook) cleanupOldLogs() {
+	cutoffTime := time.Now().AddDate(0, 0, -LogRetentionDays)
+
+	result, err := hook.db.Exec("DELETE FROM logs WHERE timestamp < ?", cutoffTime)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to cleanup old logs: %v\n", err)
+		return
+	}
+
+	if rowsAffected, _ := result.RowsAffected(); rowsAffected > 0 {
+		fmt.Printf("Cleaned up %d old log entries\n", rowsAffected)
 	}
 }
 
