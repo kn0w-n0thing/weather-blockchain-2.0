@@ -2,6 +2,7 @@ package logger
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/sirupsen/logrus"
@@ -127,7 +128,7 @@ func (hook *AsyncDatabaseHook) worker() {
 
 	const batchSize = 50
 	const flushInterval = 100 * time.Millisecond
-	
+
 	batch := make([]LogRequest, 0, batchSize)
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
@@ -194,7 +195,7 @@ func (hook *AsyncDatabaseHook) worker() {
 		case <-hook.shutdownCh:
 			// Flush remaining batch
 			flushBatch()
-			
+
 			// Drain remaining logs before shutdown
 			for {
 				select {
@@ -349,13 +350,12 @@ func (f *Log4jFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 
 	// Add fields if present
 	if len(entry.Data) > 0 {
-		logLine += " {"
-		var fieldParts []string
-		for k, v := range entry.Data {
-			fieldParts = append(fieldParts, fmt.Sprintf("%s=%v", k, v))
+		jsonData, err := json.MarshalIndent(entry.Data, "", "  ")
+		if err != nil {
+			logLine += fmt.Sprintf(" {error formatting fields: %v}", err)
+		} else {
+			logLine += "\n" + string(jsonData)
 		}
-		logLine += strings.Join(fieldParts, ", ")
-		logLine += "}"
 	}
 
 	return []byte(logLine + "\n"), nil
