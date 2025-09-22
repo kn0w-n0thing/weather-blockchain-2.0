@@ -95,6 +95,23 @@ func (ce *Engine) requestMissingBlocks(futureBlock *block.Block) {
 	}
 
 	expectedNextIndex := latestBlock.Index + 1
+
+	// Handle diverged chains properly
+	if futureBlock.Index < expectedNextIndex {
+		// This is an "old" block from a diverged chain
+		log.WithFields(logger.Fields{
+			"currentLatestIndex": latestBlock.Index,
+			"expectedNextIndex":  expectedNextIndex,
+			"futureBlockIndex":   futureBlock.Index,
+			"chainDivergence":    expectedNextIndex - futureBlock.Index,
+		}).Info("Received block from diverged chain - triggering fork resolution instead of gap sync")
+
+		// Don't try to sync missing blocks - this should trigger fork resolution
+		// The block should be added to pending blocks for fork resolution to handle
+		return
+	}
+
+	// Continue with normal gap handling for future blocks
 	gapSize := futureBlock.Index - expectedNextIndex
 
 	log.WithFields(logger.Fields{
