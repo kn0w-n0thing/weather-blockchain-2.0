@@ -1224,7 +1224,7 @@ func (node *Node) handleConnection(conn net.Conn) {
 		case protocol.MessageTypeBlock:
 			log.WithField("messageType", "Block").Debug("handleConnection: Processing block message")
 
-			fmt.Printf("Raw message: %s\n", msg.Payload)
+			log.WithField("payload", msg.Payload).Debug("handleConnection: raw message")
 			// Parse the block
 			var blockMsg protocol.BlockMessage
 			if err := json.Unmarshal(msg.Payload, &blockMsg); err != nil {
