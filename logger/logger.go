@@ -31,7 +31,7 @@ const (
 	LogQueueBufferSize = 10000
 
 	// Data retention
-	LogRetentionDays = 30             // Keep logs for 30 days
+	LogRetentionDays = 10             // Keep logs for 10 days
 	CleanupInterval  = 24 * time.Hour // Run cleanup daily
 
 	// Directory permissions
