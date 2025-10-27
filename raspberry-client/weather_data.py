@@ -27,7 +27,7 @@ class WeatherDataManager:
     SOURCE_NAMES = {
         'Mj': '墨迹天气',
         'Op': 'OpenWeather',
-        'MS': 'AruzeWeather',
+        'MS': 'AzureWeather',
         'Xz': '国家气象局',
         'Ac': 'AccuWeather'
     }
